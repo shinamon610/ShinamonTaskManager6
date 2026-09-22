@@ -33,7 +33,7 @@ private def parseId (text : String) : IO NodeId := do
 
 private def parseStatus (text : String) : IO Status :=
   match text with
-  | "not-started" => pure .NotStarted
+  | "ns" => pure .NotStarted
   | "doing" => pure .Doing
   | "pending" => pure .Pending
   | "done" => pure .Done
