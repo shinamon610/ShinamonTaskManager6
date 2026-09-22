@@ -148,6 +148,36 @@ def run (path : System.FilePath) (program : TaskProg α) : IO (α × Graph) := d
   db.transaction (mode := .immediate) do
     (interpret db program).run {}
 
+/-- CLI 用の更新。現在のグラフの検証と更新を同じトランザクションで行う。 -/
+def setTaskStatus (path : System.FilePath) (program : TaskProg Unit)
+    (id : NodeId) (status : Status) (result : Option String := none) : IO Unit := do
+  let db ← openExisting path .readWrite
+  db.transaction (mode := .immediate) do
+    let record ← readById db id
+    let (_, graph) ← (interpret db program).run {}
+    unless graph.nodes.any (·.id == id) do
+      throw <| IO.userError s!"Task {id} is not in the current graph"
+    if record.state.status == .Done && status != .Done then
+      throw <| IO.userError s!"Task {id} is already done and cannot return to an incomplete status"
+    for edge in graph.edges do
+      if edge.source == id then
+        let some dependency := graph.nodes.find? (·.id == edge.target)
+          | throw <| IO.userError s!"Missing dependency: {edge.target}"
+        unless dependency.state.status == .Done do
+          throw <| IO.userError s!"Task {id} requires completed dependency {dependency.id} ({dependency.task.name})"
+    if let .Progress current total := status then
+      if total == 0 || current > total then
+        throw <| IO.userError "Progress requires 0 <= CURRENT <= TOTAL and TOTAL > 0"
+    let mut state := { record.state with status }
+    if status == .Done then
+      let clock ← db.prepare "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+      unless ← clock.step do throw <| IO.userError "Failed to read current time"
+      let completedAt ← clock.columnText 0
+      state := { state with
+        completedAt := some completedAt
+        result := result.getD record.state.result }
+    writeState db id state
+
 def runJson (path : System.FilePath) (program : TaskProg α) : IO Json := do
   let (_, graph) ← run path program
   return toJson graph

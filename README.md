@@ -12,8 +12,8 @@ lake build
 .lake/build/bin/taskdb graph
 .lake/build/bin/taskdb gets
 .lake/build/bin/taskdb get 1
-.lake/build/bin/taskdb set 1 done "確認完了"
 .lake/build/bin/taskdb set 1 progress 2 5
+.lake/build/bin/taskdb set 1 done "確認完了"
 ```
 
 `lake build` でライブラリと実行ファイルをビルドする。ソース変更時は再ビルドが必要。DB や設定変更時は不要。
@@ -82,6 +82,8 @@ DB パスを明示した場合は設定ファイルを読まない。設定が�
 結果に空白がある場合は引用符で囲む。結果省略時は既存結果を保持し、空文字を渡すと消去する。done の再実行は完了日時も更新する。他の状態への更新では結果と完了日時を保持する。
 `set-state` コマンドは削除済み。`get` / `gets` は読み取り専用。`set` も未登録 ID や存在しない DB を新規作成しない。
 
+CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` を持つ `Request` に変換する。ID・状態・進捗もここで解析し、設定解決とコマンド実行は ADT で分岐する。
+
 ## データとグラフ
 
 - `Task` は名前・タグ・担当・リンク・予定日・詳細を持つ独自型。`TaskState` は状態・完了日・結果。
@@ -95,7 +97,15 @@ DB パスを明示した場合は設定ファイルを読まない。設定が�
 - ソースから消えたタスクの DB 状態は残り、`gets` で確認できる。
 - 旧形式の DB は `graph` 時に状態を保持して移行する。get/gets/set は移行しない。
 
-現時点の `set` は依存関係による更新制限をまだ行わない。「末端」の意味の確認待ち。
+`set` は現在のタスク定義からグラフを構築し、以下の更新をエラーにする。
+
+- 現在のグラフにないタスクへの更新。
+- 直接の依存先に未完了のタスクがある場合の更新（自己依存や未完了の循環も含む）。
+- Done から未完了の状態への変更。Done の再実行は許可する。
+
+未完了の状態間の変更は、上記の条件を満たせば許可する。Progress の CURRENT は 0 以上 TOTAL 以下、TOTAL は正数とする。
+検証と更新は同じトランザクションで行い、失敗時はグラフ構築中の登録もロールバックする。
+ライブラリの低水準 API `setState` / `setStatus` / `setDone` はグラフを検証しない。CLI と同じ検証には `setTaskStatus` にタスク定義を渡す。
 
 ## ファイル
 
