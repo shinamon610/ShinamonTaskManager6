@@ -1,0 +1,5 @@
+/.lake/
+/.direnv/
+*.sqlite3
+*.sqlite3-*
+__pycache__/
