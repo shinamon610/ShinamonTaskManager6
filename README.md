@@ -68,16 +68,16 @@ Git リポジトリとして公開した後は、この `require` を Git URL �
 ```
 
 相対 DB パスは設定ファイルの場所を基準にする。別設定は `--config /path/to/taskdb.json` をコマンドの前に指定する。
-DB パスを明示した場合は設定ファイルを読まない。設定がない・不正な場合はエラーにする。
+DB は必ず設定ファイルの `sqlitePath` を使う。コマンド引数での DB パス指定は受け付けない。設定がない・不正な場合はエラーにする。
 
 | コマンド | 動作 |
 | --- | --- |
-| `graph [DB]` | ソースの定義を実行してグラフを JSON 出力 |
-| `gets [DB]` | DB 内の全タスクを ID 順に JSON 配列で出力 |
-| `get [DB] ID` | 1件の ID・名前・状態を出力 |
-| `set [DB] ID not-started/doing/pending` | 状態を更新（3つのうち1つを指定） |
-| `set [DB] ID progress CURRENT TOTAL` | 進捗を更新 |
-| `set [DB] ID done [RESULT]` | 完了にして UTC の完了日時を自動設定 |
+| `graph` | ソースの定義を実行してグラフを JSON 出力 |
+| `gets` | DB 内の全タスクを ID 順に JSON 配列で出力 |
+| `get ID` | 1件の ID・名前・状態を出力 |
+| `set ID not-started/doing/pending` | 状態を更新（3つのうち1つを指定） |
+| `set ID progress CURRENT TOTAL` | 進捗を更新 |
+| `set ID done [RESULT]` | 完了にして UTC の完了日時を自動設定 |
 
 結果に空白がある場合は引用符で囲む。結果省略時は既存結果を保持し、空文字を渡すと消去する。done の再実行は完了日時も更新する。他の状態への更新では結果と完了日時を保持する。
 `set-state` コマンドは削除済み。`get` / `gets` は読み取り専用。`set` も未登録 ID や存在しない DB を新規作成しない。

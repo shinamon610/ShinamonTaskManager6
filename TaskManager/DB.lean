@@ -33,7 +33,7 @@ private def openDB (path : System.FilePath) : IO SQLite := do
 private def openExisting (path : System.FilePath) (flags : SQLite.OpenFlags) : IO SQLite := do
   let db ← SQLite.openWith path flags (busyTimeoutMs := 5000)
   unless ← hasId db do
-    throw <| IO.userError "Old or missing task schema. Run taskdb graph DB to initialize/migrate it."
+    throw <| IO.userError "Old or missing task schema. Run taskdb graph to initialize/migrate the configured database."
   return db
 
 private def register (db : SQLite) (name : String) : IO Unit := do

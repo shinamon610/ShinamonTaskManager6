@@ -61,13 +61,25 @@ class ConfigTests(unittest.TestCase):
         self.invoke("--config", config, "graph")
         self.assertTrue(absolute.exists())
 
-    def test_explicit_database_needs_no_config(self):
-        self.invoke("graph", "explicit.sqlite3")
-        task_id = self.invoke("gets", "explicit.sqlite3")[0]["id"]
-        self.invoke("set", "explicit.sqlite3", task_id, "doing")
-        self.assertEqual(self.invoke("get", "explicit.sqlite3", task_id)["state"]["status"], "Doing")
+    def test_explicit_database_is_rejected(self):
+        commands = [("graph", "explicit.sqlite3"), ("gets", "explicit.sqlite3"),
+                    ("get", "explicit.sqlite3", 1),
+                    ("set", "explicit.sqlite3", 1, "doing"),
+                    ("set", "explicit.sqlite3", 1, "done"),
+                    ("set", "explicit.sqlite3", 1, "done", "result"),
+                    ("set", "explicit.sqlite3", 1, "progress", 1, 2)]
+        for args in commands:
+            self.invoke(*args, ok=False)
+        self.config(self.cwd / "taskdb.json", "chosen.sqlite3")
+        self.invoke("graph")
+        before = self.invoke("gets")
+        for args in commands:
+            self.invoke(*args, ok=False)
+        self.assertEqual(self.invoke("gets"), before)
         (self.cwd / "taskdb.json").write_text("invalid")
-        self.invoke("graph", "explicit.sqlite3")
+        for args in commands:
+            self.invoke(*args, ok=False)
+        self.assertFalse((self.cwd / "explicit.sqlite3").exists())
 
     def test_done_result_and_automatic_completion_time(self):
         self.config(self.cwd / "taskdb.json", "chosen.sqlite3")
@@ -84,8 +96,6 @@ class ConfigTests(unittest.TestCase):
         self.assertLessEqual(completed, datetime.now(timezone.utc))
         self.invoke("set", task_id, "done")
         self.assertEqual(self.invoke("get", task_id)["state"]["result"], result)
-        self.invoke("set", "chosen.sqlite3", task_id, "done", "explicit DB result")
-        self.assertEqual(self.invoke("get", task_id)["state"]["result"], "explicit DB result")
         self.invoke("set", task_id, "done", "")
         self.assertEqual(self.invoke("get", task_id)["state"]["result"], "")
         previous = self.invoke("gets")

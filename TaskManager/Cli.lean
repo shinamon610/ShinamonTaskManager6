@@ -6,13 +6,12 @@ namespace TaskManager
 open Lean
 
 private def usage : String :=
-  "Usage:\n  taskdb [--config FILE] [graph [DB]]\n  taskdb [--config FILE] gets [DB]\n  taskdb [--config FILE] get [DB] ID\n  taskdb [--config FILE] set [DB] ID not-started|doing|pending\n  taskdb [--config FILE] set [DB] ID done [RESULT]\n  taskdb [--config FILE] set [DB] ID progress CURRENT TOTAL\n\nDefault config: ./taskdb.json (sqlitePath, relative to the config file).\nAn explicit DB path overrides the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
+  "Usage:\n  taskdb [--config FILE] [graph]\n  taskdb [--config FILE] gets\n  taskdb [--config FILE] get ID\n  taskdb [--config FILE] set ID not-started|doing|pending\n  taskdb [--config FILE] set ID done [RESULT]\n  taskdb [--config FILE] set ID progress CURRENT TOTAL\n\nDefault config: ./taskdb.json (sqlitePath, relative to the config file).\nThe database is always loaded from the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
 namespace Cli
 
 /-- DB の指定方法。設定解決後に文字列の引数列を組み直さない。 -/
 inductive DatabaseSource where
   | config (file : System.FilePath)
-  | explicit (file : System.FilePath)
 
 /-- 入力の解析を終えたコマンド。ID と状態は実行前に型へ変換する。 -/
 inductive Command where
@@ -55,27 +54,18 @@ def parse (args : List String) : IO Request := do
     | _ => (System.FilePath.mk "taskdb.json", args)
   let defaultDB := DatabaseSource.config config
   match args with
-  | []  => return ⟨defaultDB, .graph⟩
-  | ["graph", path] => return ⟨.explicit path, .graph⟩
+  | [] | ["graph"] => return ⟨defaultDB, .graph⟩
   | ["gets"] => return ⟨defaultDB, .gets⟩
-  | ["gets", path] => return ⟨.explicit path, .gets⟩
   | ["get", id] => return ⟨defaultDB, .get (← parseId id)⟩
-  | ["get", path, id] => return ⟨.explicit path, .get (← parseId id)⟩
   | ["set", id, status] => return ⟨defaultDB, .set (← parseId id) (← parseStatus status)⟩
   | ["set", id, "done", result] => return ⟨defaultDB, .done (← parseId id) (some result)⟩
-  | ["set", path, id, status] => return ⟨.explicit path, .set (← parseId id) (← parseStatus status)⟩
-  | ["set", path, id, "done", result] =>
-    return ⟨.explicit path, .done (← parseId id) (some result)⟩
   | ["set", id, "progress", current, total] =>
     return ⟨defaultDB, .set (← parseId id) (← parseProgress current total)⟩
-  | ["set", path, id, "progress", current, total] =>
-    return ⟨.explicit path, .set (← parseId id) (← parseProgress current total)⟩
   | ["--help"] | ["-h"] => return ⟨defaultDB, .help⟩
   | _ => throw <| IO.userError usage
 
 def DatabaseSource.resolve : DatabaseSource → IO System.FilePath
   | .config file => TaskConfig.loadDatabasePath file
-  | .explicit file => pure file
 
 def Request.execute (request : Request) (program : TaskProg Unit) : IO Unit := do
   let withDatabase (action : System.FilePath → IO Unit) : IO Unit := do
