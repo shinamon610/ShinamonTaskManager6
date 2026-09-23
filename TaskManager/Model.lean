@@ -13,7 +13,7 @@ structure Task where
   plannedStart : Option String := none
   plannedEnd : Option String := none
   details : String := ""
-deriving ToJson
+deriving ToJson, FromJson
 
 instance : BEq Task where
   beq a b := a.name == b.name
@@ -39,11 +39,14 @@ deriving BEq, Repr, ToJson, FromJson
 /-- DB が自動採番する永続的なタスク ID。ソースでは手書きしない。 -/
 abbrev NodeId := Nat
 
-structure TaskRecord where
+structure TaskRecord extends Task where
   id : NodeId
-  name : String
   state : TaskState
-deriving BEq, ToJson
+deriving ToJson
+
+instance : BEq TaskRecord where
+  beq a b := a.id == b.id && a.name == b.name &&
+    toJson a.toTask == toJson b.toTask && a.state == b.state
 
 structure Node where
   id : NodeId

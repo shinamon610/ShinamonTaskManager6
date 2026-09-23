@@ -8,31 +8,51 @@ open Lean
 private def schema : String := "CREATE TABLE IF NOT EXISTS task_states (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT UNIQUE NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+  assign TEXT,
+  links TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(links)),
+  plannedStart TEXT,
+  plannedEnd TEXT,
+  details TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL CHECK (json_valid(state))
 )"
 
-private def hasId (db : SQLite) : IO Bool := do
+private def hasColumn (db : SQLite) (name : String) : IO Bool := do
   let stmt ← db.prepare "PRAGMA table_info(task_states)"
   while ← stmt.step do
-    if (← stmt.columnText 1) == "id" then return true
+    if (← stmt.columnText 1) == name then return true
   return false
 
-private def openDB (path : System.FilePath) : IO SQLite := do
-  let db ← SQLite.open path 5000
-  db.transaction (mode := .immediate) do
+private def initializeSchema (db : SQLite) : IO Unit := do
+  db.exec schema
+  unless ← hasColumn db "details" do
+    let hasTask ← hasColumn db "task"
+    let hasPersistentId ← hasColumn db "id"
+    let highWater ← if hasPersistentId then do
+      let sequence ← db.prepare "SELECT seq FROM sqlite_sequence WHERE name = 'task_states'"
+      if ← sequence.step then pure (← sequence.columnInt64 0) else pure 0
+      else pure 0
+    db.exec "ALTER TABLE task_states RENAME TO task_states_legacy"
     db.exec schema
-    unless ← hasId db do
-      -- 旧形式の名前・状態を保持して、rowid を永続 ID に移行する。
-      db.exec "ALTER TABLE task_states RENAME TO task_states_legacy"
-      db.exec schema
+    if hasTask then
+      db.exec "INSERT INTO task_states(id, name, tags, assign, links, plannedStart, plannedEnd, details, state)
+        SELECT id, name, COALESCE(json_extract(task, '$.tags'), '[]'), json_extract(task, '$.assign'),
+          COALESCE(json_extract(task, '$.links'), '[]'), json_extract(task, '$.plannedStart'),
+          json_extract(task, '$.plannedEnd'), COALESCE(json_extract(task, '$.details'), ''), state
+        FROM task_states_legacy ORDER BY id"
+    else
       db.exec "INSERT INTO task_states(id, name, state)
         SELECT rowid, name, state FROM task_states_legacy ORDER BY rowid"
-      db.exec "DROP TABLE task_states_legacy"
-  return db
+    db.exec "INSERT INTO sqlite_sequence(name, seq) SELECT 'task_states', 0
+      WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'task_states')"
+    let preserveSequence ← db.prepare "UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'task_states'"
+    preserveSequence.bindInt64 1 highWater
+    preserveSequence.exec
+    db.exec "DROP TABLE task_states_legacy"
 
 private def openExisting (path : System.FilePath) (flags : SQLite.OpenFlags) : IO SQLite := do
   let db ← SQLite.openWith path flags (busyTimeoutMs := 5000)
-  unless ← hasId db do
+  unless (← hasColumn db "id") && (← hasColumn db "details") do
     throw <| IO.userError "Old or missing task schema. Run taskdb graph to initialize/migrate the configured database."
   return db
 
@@ -42,17 +62,37 @@ private def register (db : SQLite) (name : String) : IO Unit := do
   stmt.bindText 1 name
   stmt.bindText 2 (toJson ({} : TaskState)).compress
   stmt.exec
+  let reached ← db.prepare "INSERT OR IGNORE INTO reached_tasks(name) VALUES (?)"
+  reached.bindText 1 name
+  reached.exec
+
+private def readOptionalText (stmt : SQLite.Stmt) (column : Int32) : IO (Option String) := do
+  if ← stmt.columnNull column then return none
+  return some (← stmt.columnText column)
+
+private def readJson [FromJson α] (stmt : SQLite.Stmt) (column : Int32) : IO α := do
+  match Json.parse (← stmt.columnText column) >>= fromJson? with
+  | .ok value => pure value
+  | .error message => throw <| IO.userError s!"Invalid stored JSON: {message}"
 
 private def readRecord (stmt : SQLite.Stmt) : IO TaskRecord := do
   let id ← stmt.columnInt64 0
   let name ← stmt.columnText 1
-  let text ← stmt.columnText 2
-  match Json.parse text >>= fromJson? with
-  | .ok state => return { id := id.toInt.toNat, name, state }
-  | .error message => throw <| IO.userError s!"Invalid state for {name}: {message}"
+  return {
+    id := id.toInt.toNat
+    name := name
+    state := ← readJson stmt 2
+    tags := ← readJson stmt 3
+    assign := ← readOptionalText stmt 4
+    links := ← readJson stmt 5
+    plannedStart := ← readOptionalText stmt 6
+    plannedEnd := ← readOptionalText stmt 7
+    details := ← stmt.columnText 8 }
+
+private def selectRecords := "SELECT id, name, state, tags, assign, links, plannedStart, plannedEnd, details FROM task_states"
 
 private def readByName (db : SQLite) (name : String) : IO TaskRecord := do
-  let stmt ← db.prepare "SELECT id, name, state FROM task_states WHERE name = ?"
+  let stmt ← db.prepare (selectRecords ++ " WHERE name = ?")
   stmt.bindText 1 name
   unless ← stmt.step do throw <| IO.userError s!"Task not found: {name}"
   readRecord stmt
@@ -63,7 +103,7 @@ private def bindId (stmt : SQLite.Stmt) (id : NodeId) : IO Unit := do
   stmt.bindInt64 1 (Int64.ofInt id)
 
 private def readById (db : SQLite) (id : NodeId) : IO TaskRecord := do
-  let stmt ← db.prepare "SELECT id, name, state FROM task_states WHERE id = ?"
+  let stmt ← db.prepare (selectRecords ++ " WHERE id = ?")
   bindId stmt id
   unless ← stmt.step do throw <| IO.userError s!"Task not found: {id}"
   readRecord stmt
@@ -110,10 +150,14 @@ def getState (path : System.FilePath) (id : NodeId) : IO TaskState := do
 /-- グラフに現れないものも含め、DB 内の全タスクを ID 順で取得する。 -/
 def getTasks (path : System.FilePath) : IO (Array TaskRecord) := do
   let db ← openExisting path .readonly
-  let stmt ← db.prepare "SELECT id, name, state FROM task_states ORDER BY id"
+  let stmt ← db.prepare (selectRecords ++ " ORDER BY id")
   let mut records := #[]
   while ← stmt.step do records := records.push (← readRecord stmt)
   return records
+
+private def bindOptionalText (stmt : SQLite.Stmt) (index : Int32) : Option String → IO Unit
+  | some value => stmt.bindText index value
+  | none => stmt.bindNull index
 
 private def interpret (db : SQLite) (program : TaskProg α) : StateT Graph IO α := do
   match program with
@@ -128,6 +172,16 @@ private def interpret (db : SQLite) (program : TaskProg α) : StateT Graph IO α
     | some node => interpret db (next node.id)
     | none =>
       register db task.name
+      let update ← db.prepare "UPDATE task_states SET tags = ?2, assign = ?3, links = ?4,
+        plannedStart = ?5, plannedEnd = ?6, details = ?7 WHERE name = ?1"
+      update.bindText 1 task.name
+      update.bindText 2 (toJson task.tags).compress
+      bindOptionalText update 3 task.assign
+      update.bindText 4 (toJson task.links).compress
+      bindOptionalText update 5 task.plannedStart
+      bindOptionalText update 6 task.plannedEnd
+      update.bindText 7 task.details
+      update.exec
       let record ← readByName db task.name
       set { graph with nodes := graph.nodes.push { id := record.id, task, state := record.state } }
       interpret db (next record.id)
@@ -141,12 +195,17 @@ private def interpret (db : SQLite) (program : TaskProg α) : StateT Graph IO α
 /--
 必要な時点で状態を読み、実行結果のグラフを返す。DB に辺やグラフは保存しない。
 同名は同じ DB ID と状態を引き継ぐ。定義情報は実行中の最初の追加を採用する。
+全定義情報を保存し、状態参照も含め今回到達しなかった名前は削除する。
 一回の実行は一つのトランザクションなので、分岐と出力の状態が整合する。
 -/
 def run (path : System.FilePath) (program : TaskProg α) : IO (α × Graph) := do
-  let db ← openDB path
+  let db ← SQLite.open path 5000
   db.transaction (mode := .immediate) do
-    (interpret db program).run {}
+    initializeSchema db
+    db.exec "CREATE TEMP TABLE reached_tasks (name TEXT PRIMARY KEY)"
+    let output ← (interpret db program).run {}
+    db.exec "DELETE FROM task_states WHERE name NOT IN (SELECT name FROM reached_tasks)"
+    return output
 
 /-- CLI 用の更新。現在のグラフの検証と更新を同じトランザクションで行う。 -/
 def setTaskStatus (path : System.FilePath) (program : TaskProg Unit)
@@ -154,6 +213,7 @@ def setTaskStatus (path : System.FilePath) (program : TaskProg Unit)
   let db ← openExisting path .readWrite
   db.transaction (mode := .immediate) do
     let record ← readById db id
+    db.exec "CREATE TEMP TABLE reached_tasks (name TEXT PRIMARY KEY)"
     let (_, graph) ← (interpret db program).run {}
     unless graph.nodes.any (·.id == id) do
       throw <| IO.userError s!"Task {id} is not in the current graph"

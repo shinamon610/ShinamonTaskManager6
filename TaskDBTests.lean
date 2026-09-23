@@ -76,7 +76,7 @@ private def tests (path : System.FilePath) : IO Unit := do
     "JSON direction and persistent IDs"
 
   let records ← TaskDB.getTasks path
-  check (records.any (·.name == "設計の見直し")) "gets includes tasks absent from current graph"
+  check (!(records.any (·.name == "設計の見直し"))) "run removes tasks outside reached set"
   for record in records do
     check ((← TaskDB.getTask path record.id) == record) "gets is get for every row"
 
@@ -144,10 +144,102 @@ private def migrationTest (path : System.FilePath) : IO Unit := do
   expectFailure (discard (TaskDB.getTasks path)) "reads must not migrate schema"
   let (id, _) ← TaskDB.run path (push { name := "既存タスク" })
   check (id == 42 && (← TaskDB.getState path id) == expected) "migration preserves row and state"
-  let (newId, _) ← TaskDB.run path (push { name := "追加タスク" })
+  let (newId, _) ← TaskDB.run path do
+    discard (push { name := "既存タスク" })
+    push { name := "追加タスク" }
   check (newId > id) "migration sequence"
   let (again, _) ← TaskDB.run path (push { name := "既存タスク" })
-  check (again == id && (← TaskDB.getTasks path).size == 2) "migration is idempotent"
+  check (again == id && (← TaskDB.getTasks path).size == 1) "migration and pruning"
+
+private def snapshotTest (path : System.FilePath) : IO Unit := do
+  let original : Task := {
+    name := "snapshot"
+    tags := [.Rust, .«読み物» (.path "/tmp/book"), .Youtube "https://example.com"]
+    assign := some "担当"
+    links := ["https://example.com", "引用'\n"]
+    plannedStart := some "2026-09-23"
+    plannedEnd := some "2026-10-01"
+    details := "詳細\n全文" }
+  let ((id, removed), _) ← TaskDB.run path do
+    let id ← push original
+    let removed ← push { name := "removed" }
+    return (id, removed)
+  check (toJson (← TaskDB.getTask path id).toTask == toJson original) "all task fields roundtrip"
+  let state : TaskState := { status := .Done, completedAt := some "2026-09-23", result := "保持" }
+  TaskDB.setState path id state
+  let updated : Task := { original with
+    tags := [], assign := none, links := []
+    plannedStart := none, plannedEnd := none, details := "更新" }
+  let (same, _) ← TaskDB.run path do
+    let id ← push updated
+    discard (push original)
+    return id
+  let record ← TaskDB.getTask path same
+  check (same == id && record.name == original.name && record.state == state) "intersection preserves identity and state"
+  check (toJson record.toTask == toJson updated) "metadata replaced including cleared fields; first definition wins"
+  expectFailure (discard (TaskDB.getTask path removed)) "A minus B deleted"
+  let before ← TaskDB.getTasks path
+  expectFailure (discard (TaskDB.run path do
+    discard (push original)
+    let newId ← push { name := "failed" }
+    addEdge newId 999999)) "failed snapshot"
+  check ((← TaskDB.getTasks path) == before) "failed snapshot preserves metadata, states and membership"
+  let (readState, readGraph) ← TaskDB.run path (getTaskState original.name)
+  check (readState == state && readGraph.nodes.isEmpty) "state-only reads remain reachable"
+  check (toJson (← TaskDB.getTask path id).toTask == toJson updated) "state-only reads preserve full metadata"
+  let (readThenAdded, _) ← TaskDB.run path do
+    discard (getTaskState original.name)
+    push original
+  check (readThenAdded == id && toJson (← TaskDB.getTask path id).toTask == toJson original)
+    "definition after state read replaces metadata"
+  let (_, _) ← TaskDB.run path (pure () : TaskProg Unit)
+  check ((← TaskDB.getTasks path).isEmpty) "empty snapshot deletes all tasks"
+  let (fresh, _) ← TaskDB.run path (push original)
+  check (fresh > removed && (← TaskDB.getState path fresh) == ({} : TaskState)) "reappearance has fresh ID and state"
+
+private def previousSchemaTest (path : System.FilePath) : IO Unit := do
+  let db ← SQLite.open path
+  db.exec "CREATE TABLE task_states (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, state TEXT NOT NULL)"
+  let insert ← db.prepare "INSERT INTO task_states(id, name, state) VALUES (77, 'existing', ?)"
+  let state : TaskState := { status := .Progress 1 3, result := "keep" }
+  insert.bindText 1 (toJson state).compress
+  insert.exec
+  let task : Task := { name := "existing", details := "移行時の定義", tags := [.Lean4] }
+  let (id, _) ← TaskDB.run path (push task)
+  let record ← TaskDB.getTask path id
+  check (id == 77 && record.state == state && toJson record.toTask == toJson task) "three-column migration"
+
+private def nestedSchemaTest (path : System.FilePath) : IO Unit := do
+  let db ← SQLite.open path
+  db.exec "CREATE TABLE task_states (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL,
+    task TEXT NOT NULL, state TEXT NOT NULL)"
+  let task : Task := {
+    name := "nested", tags := [.Rust], assign := some "担当"
+    links := ["link"], plannedStart := some "start", plannedEnd := some "end", details := "本文" }
+  let state : TaskState := { status := .Done, result := "結果", completedAt := some "date" }
+  let insert ← db.prepare "INSERT INTO task_states(id, name, task, state) VALUES (80, 'nested', ?1, ?2)"
+  insert.bindText 1 (toJson task).compress
+  insert.bindText 2 (toJson state).compress
+  insert.exec
+  db.exec "UPDATE sqlite_sequence SET seq = 100 WHERE name = 'task_states'"
+  expectFailure (discard (TaskDB.run path do
+    discard (getTaskState "nested")
+    addEdge 80 999)) "migration rollback"
+  let columns ← db.prepare "SELECT COUNT(*) FROM pragma_table_info('task_states') WHERE name = 'task'"
+  discard columns.step
+  check ((← columns.columnInt 0) == 1) "failed migration preserves old schema"
+  discard columns.step
+  discard (TaskDB.run path (getTaskState "nested"))
+  let record ← TaskDB.getTask path 80
+  check (toJson record.toTask == toJson task && record.state == state) "nested migration preserves all fields"
+  let columns ← db.prepare "SELECT COUNT(*) FROM pragma_table_info('task_states') WHERE name = 'task'"
+  discard columns.step
+  check ((← columns.columnInt 0) == 0) "nested column removed"
+  discard columns.step
+  let (id, _) ← TaskDB.run path do
+    discard (getTaskState "nested")
+    push { name := "new" }
+  check (id > 100) "migration preserves autoincrement high water"
 
 def main (args : List String) : IO UInt32 := do
   try
@@ -157,6 +249,9 @@ def main (args : List String) : IO UInt32 := do
       throw <| IO.userError "Use a new database path for tests"
     tests path
     migrationTest legacy
+    snapshotTest (path ++ ".snapshot")
+    previousSchemaTest (path ++ ".previous")
+    nestedSchemaTest (path ++ ".nested")
     IO.println "All taskdb integration tests passed."
     return (0 : UInt32)
   catch e =>

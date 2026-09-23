@@ -12,7 +12,7 @@ inductive Source
 | NotPurchasedYet : (url:Option String:=none)->Source
 | «会社のオライリー»
 | path: System.FilePath -> Source
-deriving Repr, BEq, Hashable, ToJson
+deriving Repr, BEq, Hashable, ToJson, FromJson
 
 inductive MyTag
 | Idea
@@ -50,6 +50,6 @@ inductive MyTag
 | «業務»
 | «生活»
 | DB
-deriving Repr, BEq, Hashable,Inhabited,ToJson
+deriving Repr, BEq, Hashable,Inhabited,ToJson,FromJson
 
 end TaskManager

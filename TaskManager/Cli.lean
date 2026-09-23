@@ -6,7 +6,7 @@ namespace TaskManager
 open Lean
 
 private def usage : String :=
-  "Usage:\n  taskdb [--config FILE] [graph]\n  taskdb [--config FILE] gets\n  taskdb [--config FILE] get ID\n  taskdb [--config FILE] set ID not-started|doing|pending\n  taskdb [--config FILE] set ID done [RESULT]\n  taskdb [--config FILE] set ID progress CURRENT TOTAL\n\nDefault config: ./taskdb.json (sqlitePath, relative to the config file).\nThe database is always loaded from the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
+  "Usage:\n  taskdb [--config FILE] [graph]\n  taskdb [--config FILE] gets\n  taskdb [--config FILE] get ID\n  taskdb [--config FILE] set ID ns|doing|pending\n  taskdb [--config FILE] set ID done [RESULT]\n  taskdb [--config FILE] set ID progress CURRENT TOTAL\n\nDefault config: ./taskdb.json (sqlitePath, relative to the config file).\nThe database is always loaded from the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
 namespace Cli
 
 /-- DB の指定方法。設定解決後に文字列の引数列を組み直さない。 -/

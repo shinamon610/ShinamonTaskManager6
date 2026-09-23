@@ -33,11 +33,17 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue((self.cwd / "chosen.sqlite3").exists())
         self.assertFalse((self.cwd / "tasks.sqlite3").exists())
         records = self.invoke("gets")
+        design_record = next(row for row in records if row["name"] == "設計")
+        self.assertEqual(design_record["name"], "設計")
+        self.assertEqual(design_record["details"], "実装の方針を決める")
+        self.assertEqual(set(design_record),
+                         {"id", "name", "tags", "assign", "links", "plannedStart", "plannedEnd", "details", "state"})
         task_id = next(row["id"] for row in records if row["name"] == "設計")
         self.invoke("set", task_id, "done")
         self.assertEqual(self.invoke("get", task_id)["state"]["status"], "Done")
         self.invoke("graph")
         self.assertIn("実装", [row["name"] for row in self.invoke("gets")])
+        self.assertNotIn("設計の見直し", [row["name"] for row in self.invoke("gets")])
         self.invoke("set", task_id, "progress", 2, 5, ok=False)
         self.assertEqual(self.invoke("get", task_id)["state"]["status"], "Done")
         previous = self.invoke("get", task_id)
@@ -119,7 +125,7 @@ class ConfigTests(unittest.TestCase):
         records = self.invoke("gets")
         for name in ["設計の見直し", "A", "B"]:
             task_id = next(row["id"] for row in records if row["name"] == name)
-            for status in [("doing",), ("pending",), ("not-started",),
+            for status in [("doing",), ("pending",), ("ns",),
                            ("done", "rejected result"), ("progress", 1, 2)]:
                 result = self.invoke("set", task_id, *status, ok=False)
                 self.assertIn("requires completed dependency", result.stderr)
@@ -131,10 +137,10 @@ class ConfigTests(unittest.TestCase):
         task_id = next(row["id"] for row in self.invoke("gets") if row["name"] == "設計")
         self.invoke("set", task_id, "doing")
         self.invoke("set", task_id, "pending")
-        self.invoke("set", task_id, "not-started")
+        self.invoke("set", task_id, "ns")
         self.invoke("set", task_id, "done", "keep")
         before = self.invoke("gets")
-        for status in [("not-started",), ("doing",), ("pending",), ("progress", 1, 2)]:
+        for status in [("ns",), ("doing",), ("pending",), ("progress", 1, 2)]:
             result = self.invoke("set", task_id, *status, ok=False)
             self.assertIn("already done", result.stderr)
             self.assertEqual(self.invoke("gets"), before)
