@@ -1,7 +1,23 @@
-import ExampleTasks
-import TaskManager.DB
+import TaskManager
 
 open Lean TaskManager
+
+private def workflow : TaskProg Unit := do
+  let design : Task := { name := "設計", tags := [.Programing], details := "実装の方針を決める" }
+  if (← getTaskStatus "設計") == .Done then
+    if (← getTaskStatus "実装") == .Done then
+      pushU { name := "テスト", tags := [.Programing] } [
+        push { name := "実装", tags := [.Programing] } [push design]
+      ]
+    else
+      pushU { name := "実装", tags := [.Programing] } [push design]
+  else
+    pushU { name := "設計の見直し" } [push design]
+
+private def cycle : TaskProg Unit := do
+  let a ← push { name := "A" }
+  let b ← push { name := "B" } [] [a]
+  addEdge a b
 
 private def check (condition : Bool) (message : String) : IO Unit := do
   unless condition do throw <| IO.userError message
@@ -56,20 +72,20 @@ private def tests (path : System.FilePath) : IO Unit := do
   TaskDB.setState path stateOnlyId {}
   check ((← TaskDB.getState path stateOnlyId) == ({} : TaskState)) "idempotent update"
 
-  let (_, first) ← TaskDB.run path Examples.workflow
+  let (_, first) ← TaskDB.run path workflow
   check (names first == #["設計", "設計の見直し"]) "initial branch"
   check (!(← registered path "実装") && !(← registered path "テスト")) "unselected registration"
   let designId ← idOf path "設計"
   TaskDB.setState path designId { status := .Done, result := "approved", completedAt := some "2026-09-22" }
-  let (_, second) ← TaskDB.run path Examples.workflow
+  let (_, second) ← TaskDB.run path workflow
   check (names second == #["設計", "実装"]) "DB branch"
   check (!(← registered path "テスト")) "nested unselected branch"
   let implementId ← idOf path "実装"
   TaskDB.setStatus path implementId (.Progress 2 5)
-  let (_, progress) ← TaskDB.run path Examples.workflow
+  let (_, progress) ← TaskDB.run path workflow
   check (progress.nodes[1]?.map (·.state.status) == some (.Progress 2 5)) "progress persistence"
   TaskDB.setStatus path implementId .Done
-  let (_, third) ← TaskDB.run path Examples.workflow
+  let (_, third) ← TaskDB.run path workflow
   let testId ← idOf path "テスト"
   check (third.edges == #[⟨implementId, designId⟩, ⟨testId, implementId⟩]) "edge direction"
   check (toJson third == Json.arr #[nodeJson designId "設計" #[nodeJson implementId "実装" #[nodeJson testId "テスト"]]])
@@ -93,7 +109,7 @@ private def tests (path : System.FilePath) : IO Unit := do
   let state ← TaskDB.getState path designId
   check (state.result == "approved" && state.completedAt == some "2026-09-22") "status-only update"
 
-  let (_, cycle) ← TaskDB.run path Examples.cycle
+  let (_, cycle) ← TaskDB.run path cycle
   let a ← idOf path "A"
   let b ← idOf path "B"
   check (cycle.edges == #[⟨b, a⟩, ⟨a, b⟩]) "cycle"
@@ -242,6 +258,8 @@ private def nestedSchemaTest (path : System.FilePath) : IO Unit := do
   check (id > 100) "migration preserves autoincrement high water"
 
 def main (args : List String) : IO UInt32 := do
+  if let "--cli" :: cliArgs := args then
+    return ← TaskManager.cli (do workflow; cycle) cliArgs
   try
     let [path] := args | throw <| IO.userError "Usage: taskdb_tests NEW_DB_PATH"
     let legacy := System.FilePath.mk (path ++ ".legacy")

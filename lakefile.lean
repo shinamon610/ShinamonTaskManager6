@@ -9,11 +9,6 @@ require leansqlite from git
 
 @[default_target]
 lean_lib TaskManager
-lean_lib ExampleTasks
-
-@[default_target]
-lean_exe taskdb where
-  root := `Main
 
 lean_exe taskdb_tests where
   root := `TaskDBTests

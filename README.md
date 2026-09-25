@@ -3,24 +3,15 @@
 Lean のタスク定義を initial encoding の `TaskProg` として記述し、SQLite の状態をオンデマンドに読みながらグラフを構築するライブラリ。
 `TaskManager.cli tasks args` に利用側の定義を渡す。ライブラリ自身は特定の TODO やサンプルを知らない。
 
-## ビルド・実行
+## ビルド
 
 ```sh
 cd ~/Projects/ShinamonTaskManager6
 nix develop
 lake build
-.lake/build/bin/taskdb graph
-.lake/build/bin/taskdb gets
-.lake/build/bin/taskdb get 1
-.lake/build/bin/taskdb set 1 progress 2 5
-.lake/build/bin/taskdb set 1 done "確認完了"
 ```
 
-`lake build` でライブラリと実行ファイルをビルドする。ソース変更時は再ビルドが必要。DB や設定変更時は不要。
-`lake exe taskdb graph` でも実行できる。引数なしは `graph` と同じ。
-
-`Main.lean` は CLI に `ExampleTasks.lean` の定義を渡すだけの入口。サンプルには設計・実装などの分岐と A/B の循環があり、単一の `graph` で両方を出力する。`tasks` / `cycle` の選択引数はない。
-旧プロジェクトの個別 TODO 群は移行していない。移行した DB のうち、現在の定義で到達するタスクの状態を保持する。
+`lake build` でライブラリをビルドする。タスク定義と実行入口は利用側の repo に置く。
 
 ## 利用側のコード
 
@@ -45,22 +36,22 @@ def main (args : List String) : IO UInt32 :=
 `getTaskStatus` / `getTaskState` に到達して初めて DB を読み、その結果で続きを選ぶ。未選択の分岐は実行しない。
 複数ファイルのタスク群は、利用側の `tasks` で呼び出して合成する。
 
-別プロジェクトの `lakefile.lean` では、現在はローカルパスで参照できる。
+利用側の `lakefile.lean` に GitHub の依存を追加する（ユーザー名と revision は公開先に合わせて置き換える）。上記のコードは利用側の `Main.lean` に置く。
 
 ```lean
 import Lake
 open Lake DSL
 
 package MyTodos
-require ShinamonTaskManager6 from "../ShinamonTaskManager6"
+require ShinamonTaskManager6 from git
+  "https://github.com/USER/ShinamonTaskManager6.git" @ "REVISION"
 
 @[default_target]
 lean_exe todo where
   root := `Main
 ```
 
-Git リポジトリとして公開した後は、この `require` を Git URL と revision の指定に置き換える。
-実際に import する利用側の最小例は `examples/consumer/` にある。
+利用側の `lean-toolchain` は `leanprover/lean4:v4.31.0` に合わせる。利用側の repo で `lake update`、`lake build` を実行し、以下の設定ファイルを置いて `lake exe todo graph` で起動する。引数なしは `graph` と同じ。
 
 ## 設定・コマンド
 
@@ -121,7 +112,6 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
 - `TaskManager/Program.lean`: 操作型・Monad・push 等
 - `TaskManager/DB.lean`: SQLite 実行器と状態更新
 - `TaskManager/Config.lean`, `Cli.lean`: 設定と再利用できる CLI
-- `ExampleTasks.lean`, `Main.lean`: 利用側の定義と実行入口
 
 ## テスト
 
@@ -130,9 +120,6 @@ lake build taskdb_tests
 taskdb_test_dir=$(mktemp -d)
 .lake/build/bin/taskdb_tests "$taskdb_test_dir/tasks.sqlite3"
 python3 tests/test_taskdb_config.py
-cd examples/consumer
-lake build
-.lake/build/bin/todo graph
 ```
 
 実 DB による分岐、名前と ID の保持、移行、循環・共有 JSON、ロールバック、設定、CLI を検証する。

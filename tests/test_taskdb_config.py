@@ -1,4 +1,4 @@
-"""Run after `lake build taskdb`; tests use isolated temporary databases."""
+"""Run after `lake build taskdb_tests`; tests use isolated temporary databases."""
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 
-BINARY = Path(__file__).resolve().parents[1] / ".lake/build/bin/taskdb"
+BINARY = Path(__file__).resolve().parents[1] / ".lake/build/bin/taskdb_tests"
 
 
 class ConfigTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class ConfigTests(unittest.TestCase):
 
     def invoke(self, *args, ok=True):
         result = subprocess.run(
-            [str(BINARY), *map(str, args)], cwd=self.cwd,
+            [str(BINARY), "--cli", *map(str, args)], cwd=self.cwd,
             text=True, capture_output=True,
         )
         self.assertEqual(result.returncode == 0, ok, result.stderr)
@@ -179,7 +179,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_help_and_invalid_arguments_without_config(self):
         for args in [("--help",), ("-h",), ("--config", "missing.json", "--help")]:
-            result = subprocess.run([str(BINARY), *args], cwd=self.cwd,
+            result = subprocess.run([str(BINARY), "--cli", *args], cwd=self.cwd,
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Usage:", result.stdout)
