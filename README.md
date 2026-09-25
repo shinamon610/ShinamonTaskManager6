@@ -30,14 +30,17 @@ import TaskManager
 open TaskManager
 
 def tasks : TaskProg Unit := do
-  let design ← push { name := "設計", tags := [.Programing] }
-  if (← getTaskStatus "設計") == .Done then
-    pushU { name := "実装" } [] [design]
+  pushU { name := "テスト" } [
+    push { name := "実装" } [
+      push { name := "設計", tags := [.Programing] }
+    ]
+  ]
 
 def main (args : List String) : IO UInt32 :=
   TaskManager.cli tasks args
 ```
 
+`pushU 親 [push 子 …]` の入れ子が依存関係の木になる。子は親の前提タスクで、通常はノード ID を変数に束縛する必要がない。共有する既存ノードは第3引数の `refs` に渡し、循環は `addEdge` で結べる。
 `TaskProg` は帰納型で操作と続きを表し、`Monad` により `do` / `if` を使える。任意の IO を埋め込む操作はない。
 `getTaskStatus` / `getTaskState` に到達して初めて DB を読み、その結果で続きを選ぶ。未選択の分岐は実行しない。
 複数ファイルのタスク群は、利用側の `tasks` で呼び出して合成する。
