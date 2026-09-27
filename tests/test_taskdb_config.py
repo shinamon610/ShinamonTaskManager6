@@ -1,5 +1,6 @@
 """Run after `lake build taskdb_tests`; tests use isolated temporary databases."""
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
@@ -37,7 +38,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(design_record["name"], "設計")
         self.assertEqual(design_record["details"], "実装の方針を決める")
         self.assertEqual(set(design_record),
-                         {"id", "name", "tags", "assign", "links", "plannedStart", "plannedEnd", "details", "state"})
+                         {"id", "name", "tags", "assign", "plannedStart", "plannedEnd", "details", "state"})
         task_id = next(row["id"] for row in records if row["name"] == "設計")
         self.invoke("set", task_id, "done")
         self.assertEqual(self.invoke("get", task_id)["state"]["status"], "Done")
@@ -177,6 +178,51 @@ class ConfigTests(unittest.TestCase):
         self.invoke("set", 1, "done", ok=False)
         self.assertFalse((self.cwd / "missing.sqlite3").exists())
 
+    def test_relational_state_schema_constraints_and_cascade(self):
+        self.config(self.cwd / "taskdb.json", "chosen.sqlite3")
+        self.invoke("graph")
+        with sqlite3.connect(self.cwd / "chosen.sqlite3") as db:
+            db.execute("PRAGMA foreign_keys = ON")
+            task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
+            self.assertNotIn("links", task_columns)
+            self.assertNotIn("state", task_columns)
+            state_columns = {row[1] for row in db.execute("PRAGMA table_info(task_states)")}
+            self.assertEqual(state_columns, {"task_id", "status", "progress_current",
+                                            "progress_total", "completed_at", "result"})
+            task_id = db.execute("SELECT id FROM tasks WHERE name = '設計'").fetchone()[0]
+            for sql in [
+                "UPDATE task_states SET status = 'invalid' WHERE task_id = ?",
+                "UPDATE task_states SET status = 'Progress' WHERE task_id = ?",
+                "UPDATE task_states SET status = 'Progress', progress_current = 3, progress_total = 2 WHERE task_id = ?",
+                "UPDATE task_states SET status = 'Progress', progress_current = 0, progress_total = 0 WHERE task_id = ?",
+                "UPDATE task_states SET status = 'Progress', progress_current = -1, progress_total = 2 WHERE task_id = ?",
+                "UPDATE task_states SET status = 'Progress', progress_current = 0.5, progress_total = 2 WHERE task_id = ?",
+                "UPDATE task_states SET progress_current = 1, progress_total = 2 WHERE task_id = ?",
+                "INSERT INTO task_states(task_id) VALUES (?)",
+            ]:
+                with self.assertRaises(sqlite3.IntegrityError):
+                    db.execute(sql, (task_id,))
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("INSERT INTO task_states(task_id) VALUES (999999)")
+            db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            self.assertIsNone(db.execute("SELECT 1 FROM task_states WHERE task_id = ?", (task_id,)).fetchone())
+        self.invoke("graph")
+        records = self.invoke("gets")
+        design = next(row["id"] for row in records if row["name"] == "設計")
+        review = next(row["id"] for row in records if row["name"] == "設計の見直し")
+        self.invoke("set", design, "progress", 1, 2)
+        with sqlite3.connect(self.cwd / "chosen.sqlite3") as db:
+            self.assertEqual(db.execute("SELECT status, progress_current, progress_total FROM task_states WHERE task_id = ?", (design,)).fetchone(), ("Progress", 1, 2))
+        self.invoke("set", design, "doing")
+        with sqlite3.connect(self.cwd / "chosen.sqlite3") as db:
+            self.assertEqual(db.execute("SELECT progress_current, progress_total FROM task_states WHERE task_id = ?", (design,)).fetchone(), (None, None))
+        self.invoke("set", design, "done")
+        self.invoke("graph")
+        with sqlite3.connect(self.cwd / "chosen.sqlite3") as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM task_states WHERE task_id = ?", (review,)).fetchone())
+            self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
+            self.assertEqual(db.execute("SELECT count(*) FROM tasks").fetchone(), db.execute("SELECT count(*) FROM task_states").fetchone())
+
     def test_help_and_invalid_arguments_without_config(self):
         for args in [("--help",), ("-h",), ("--config", "missing.json", "--help")]:
             result = subprocess.run([str(BINARY), "--cli", *args], cwd=self.cwd,
@@ -187,6 +233,7 @@ class ConfigTests(unittest.TestCase):
                      ("set", "1", "unknown"), ("set", "1", "progress", "3", "2"),
                      ("set", "1", "progress", "0", "0"),
                      ("set", "1", "progress", "-1", "2"),
+                     ("set", "1", "progress", "0", "9223372036854775808"),
                      ("set", "1", "done", "result", "extra"),
                      ("--config",), ("unknown",)]:
             self.invoke(*args, ok=False)

@@ -42,8 +42,8 @@ private def parseStatus (text : String) : IO Status :=
 private def parseProgress (current total : String) : IO Status := do
   match current.toNat?, total.toNat? with
   | some c, some t =>
-    if t == 0 || c > t then
-      throw <| IO.userError "Progress requires 0 <= CURRENT <= TOTAL and TOTAL > 0"
+    if t == 0 || c > t || t > 9223372036854775807 then
+      throw <| IO.userError "Progress requires 0 <= CURRENT <= TOTAL <= 9223372036854775807 and TOTAL > 0"
     return .Progress c t
   | _, _ => throw <| IO.userError "Progress requires natural numbers"
 
@@ -67,20 +67,20 @@ def parse (args : List String) : IO Request := do
 def DatabaseSource.resolve : DatabaseSource → IO System.FilePath
   | .config file => TaskConfig.loadDatabasePath file
 
-def Request.execute (request : Request) (program : TaskProg Unit) : IO Unit := do
+def Request.execute [ToJson Tag] [FromJson Tag] (request : Request) (program : TaskProg Tag Unit) : IO Unit := do
   let withDatabase (action : System.FilePath → IO Unit) : IO Unit := do
     action (← request.database.resolve)
   match request.command with
   | .help => IO.println usage
   | .graph => withDatabase fun path => do IO.println (← TaskDB.runJson path program).pretty
-  | .gets => withDatabase fun path => do IO.println (toJson (← TaskDB.getTasks path)).pretty
-  | .get id => withDatabase fun path => do IO.println (toJson (← TaskDB.getTask path id)).pretty
+  | .gets => withDatabase fun path => do IO.println (toJson (← TaskDB.getTasks (Tag := Tag) path)).pretty
+  | .get id => withDatabase fun path => do IO.println (toJson (← TaskDB.getTask (Tag := Tag) path id)).pretty
   | .set id status => withDatabase fun path => TaskDB.setTaskStatus path program id status
   | .done id result => withDatabase fun path => TaskDB.setTaskStatus path program id .Done result
 
 end Cli
 
-def cli (program : TaskProg Unit) (args : List String) : IO UInt32 := do
+def cli [ToJson Tag] [FromJson Tag] (program : TaskProg Tag Unit) (args : List String) : IO UInt32 := do
   try
     (← Cli.parse args).execute program
     return 0

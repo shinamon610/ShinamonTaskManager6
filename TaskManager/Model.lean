@@ -1,24 +1,23 @@
-import TaskManager.Tag
+import Lean
 
 namespace TaskManager
 
 open Lean
 
 /-- ソースで定義するタスク。同一性は name の完全一致。日付は ISO 8601 文字列。 -/
-structure Task where
+structure Task (Tag : Type) where
   name : String
-  tags : List MyTag := []
+  tags : List Tag := []
   assign : Option String := none
-  links : List String := []
   plannedStart : Option String := none
   plannedEnd : Option String := none
   details : String := ""
 deriving ToJson, FromJson
 
-instance : BEq Task where
+instance : BEq (Task Tag) where
   beq a b := a.name == b.name
 
-instance : Hashable Task where
+instance : Hashable (Task Tag) where
   hash task := hash task.name
 
 inductive Status where
@@ -39,18 +38,18 @@ deriving BEq, Repr, ToJson, FromJson
 /-- DB が自動採番する永続的なタスク ID。ソースでは手書きしない。 -/
 abbrev NodeId := Nat
 
-structure TaskRecord extends Task where
+structure TaskRecord (Tag : Type) extends Task Tag where
   id : NodeId
   state : TaskState
 deriving ToJson
 
-instance : BEq TaskRecord where
+instance [ToJson Tag] : BEq (TaskRecord Tag) where
   beq a b := a.id == b.id && a.name == b.name &&
     toJson a.toTask == toJson b.toTask && a.state == b.state
 
-structure Node where
+structure Node (Tag : Type) where
   id : NodeId
-  task : Task
+  task : Task Tag
   state : TaskState
 deriving ToJson
 
@@ -60,11 +59,11 @@ structure Edge where
 deriving BEq, ToJson
 
 /-- 内部表現。JSON では依存先から後続へ dependents の入れ子で表示する。 -/
-structure Graph where
-  nodes : Array Node := #[]
+structure Graph (Tag : Type) where
+  nodes : Array (Node Tag) := #[]
   edges : Array Edge := #[]
 
-private partial def renderNode (graph : Graph) (node : Node) : StateM (List NodeId) Json := do
+private partial def renderNode (graph : Graph Tag) (node : Node Tag) : StateM (List NodeId) Json := do
   let fields := [("id", toJson node.id), ("name", toJson node.task.name)]
   if (← get).contains node.id then
     return Json.mkObj fields
@@ -81,7 +80,7 @@ private partial def renderNode (graph : Graph) (node : Node) : StateM (List Node
 再登場するノードは id/name のみの参照。
 根のない循環成分も、未表示のノードを入口にして必ず出力する。
 -/
-def Graph.toDependencyJson (graph : Graph) : Json := Id.run do
+def Graph.toDependencyJson (graph : Graph Tag) : Json := Id.run do
   let render : StateM (List NodeId) Json := do
     let mut roots := #[]
     for node in graph.nodes do
@@ -93,7 +92,7 @@ def Graph.toDependencyJson (graph : Graph) : Json := Id.run do
     return .arr roots
   return render.run [] |>.fst
 
-instance : ToJson Graph where
+instance : ToJson (Graph Tag) where
   toJson := Graph.toDependencyJson
 
 end TaskManager
