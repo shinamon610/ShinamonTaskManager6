@@ -48,11 +48,12 @@ private def idOf (path : System.FilePath) (name : String) : IO NodeId := do
     | throw <| IO.userError s!"Missing test task: {name}"
   return record.id
 
-private def refJson (id : NodeId) (name : String) : Json :=
-  Json.mkObj [("id", toJson id), ("name", toJson name)]
+private def refJson (id : NodeId) (name : String) (status : Status := .NotStarted) : Json :=
+  Json.mkObj [("id", toJson id), ("name", toJson name), ("status", toJson status)]
 
-private def nodeJson (id : NodeId) (name : String) (dependents : Array Json := #[]) : Json :=
-  (refJson id name).mergeObj (Json.mkObj [("dependents", .arr dependents)])
+private def nodeJson (id : NodeId) (name : String) (dependents : Array Json := #[])
+    (status : Status := .NotStarted) : Json :=
+  (refJson id name status).mergeObj (Json.mkObj [("dependents", .arr dependents)])
 
 private def registered (path : System.FilePath) (name : String) : IO Bool := do
   return (← TaskDB.getTasks (Tag := Json) path).any (·.name == name)
@@ -104,7 +105,7 @@ private def tests (path : System.FilePath) : IO Unit := do
   let (_, third) ← TaskDB.run (Tag := TestTag) path workflow
   let testId ← idOf path "テスト"
   check (third.edges == #[⟨implementId, designId⟩, ⟨testId, implementId⟩]) "edge direction"
-  check (toJson third == Json.arr #[nodeJson designId "設計" #[nodeJson implementId "実装" #[nodeJson testId "テスト"]]])
+  check (toJson third == Json.arr #[nodeJson designId "設計" #[nodeJson implementId "実装" #[nodeJson testId "テスト"] .Done] .Done])
     "JSON direction and persistent IDs"
 
   let records ← TaskDB.getTasks (Tag := TestTag) path

@@ -75,7 +75,8 @@ structure Graph (Tag : Type) where
   edges : Array Edge := #[]
 
 private partial def renderNode (graph : Graph Tag) (node : Node Tag) : StateM (List NodeId) Json := do
-  let fields := [("id", toJson node.id), ("name", toJson node.task.name)]
+  let fields := [("id", toJson node.id), ("name", toJson node.task.name),
+    ("status", toJson node.state.status)]
   if (← get).contains node.id then
     return Json.mkObj fields
   modify (node.id :: ·)
@@ -88,7 +89,7 @@ private partial def renderNode (graph : Graph Tag) (node : Node Tag) : StateM (L
 
 /--
 依存先を持たないタスクから後続へ展開する（既存 toEdges と同じ向き）。
-再登場するノードは id/name のみの参照。
+再登場するノードは id/name/status を表示し、dependents の再展開はしない。
 根のない循環成分も、未表示のノードを入口にして必ず出力する。
 -/
 def Graph.toDependencyJson (graph : Graph Tag) : Json := Id.run do
