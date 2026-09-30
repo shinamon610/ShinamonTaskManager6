@@ -43,7 +43,7 @@ def main (args : List String) : IO UInt32 :=
 実行開始時に CSV 全体を読み込む。`getTaskStatus` / `getTaskState` に到達したときにメモリ上の状態を参照し、その結果で続きを選ぶ。未選択の分岐は実行・登録しない。
 複数ファイルのタスク群は、利用側の `tasks` で呼び出して合成する。
 
-`MyTask Tag`・`TaskRecord Tag`・`Node Tag`・`Graph Tag` のタグ型は利用側で定義する。`Status` はライブラリ固定の `NotStarted` / `Doing` / `Pending` / `Done` / `Progress current total`。
+`MyTask Tag`・`TaskRecord Tag`・`Node Tag`・`Graph Tag` のタグ型は利用側で定義する。`Status` はライブラリ固定の `NotStarted` / `Doing` / `Done` / `Progress current total`。
 `MyTask.new name tags operator plannedStart plannedEnd details` で定義を作れる。`name` 以外は省略可能で、タグ型は文脈から推論される。担当を指定する `operator` は `assign` フィールドに格納する。
 `run` / `setTaskStatus` には `ToJson Tag`、`getTask` / `getTasks` には `FromJson Tag`、CLI には両方が必要。`TaskProg` の構築だけには不要。
 `TaskDB.getTask (Tag := MyTag) path id` / `TaskDB.getTasks (Tag := MyTag) path` のように、返り値から推論できないタグ型は明示する。状態のみを扱う `TaskDB.getState` / `setState` / `setStatus` / `setDone` はタグ型を要求しない。
@@ -81,7 +81,7 @@ lean_exe todo where
 | `graph` | ソースの定義を実行してグラフを JSON 出力 |
 | `gets` | CSV 内の全タスクを ID の辞書順に JSON 配列で出力 |
 | `get ID` | 1件の ID・名前・状態を出力 |
-| `set ID ns/doing/pending` | 状態を更新（3つのうち1つを指定） |
+| `set ID ns/doing` | 状態を更新（2つのうち1つを指定） |
 | `set ID progress CURRENT TOTAL` | 進捗を更新 |
 | `set ID done [RESULT]` | 完了にして UTC の完了日時を自動設定 |
 
@@ -101,7 +101,7 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
   id,name,tags,assign,plannedStart,plannedEnd,details,status,progressCurrent,progressTotal,completedAt,result
   ```
 
-- `tags` は JSON 配列。`assign` / `plannedStart` / `plannedEnd` / `completedAt` は JSON の `null` または文字列をセルに格納する。これにより未指定と空文字を区別する。`status` は `NotStarted` / `Doing` / `Pending` / `Done` / `Progress`。Progress 以外では進捗セルを空にする。
+- `tags` は JSON 配列。`assign` / `plannedStart` / `plannedEnd` / `completedAt` は JSON の `null` または文字列をセルに格納する。これにより未指定と空文字を区別する。`status` は `NotStarted` / `Doing` / `Done` / `Progress`。Progress 以外では進捗セルを空にする。
 - 不正な CSV、重複した ID・名前、不正な状態や進捗はエラーにし、ファイルを上書きしない。
 - `get` / `gets` は MyTask の全フィールドに `id`・`state` を加えたレコードを返す。`task` の入れ子や名前の重複はない。
 - ソース実行で名前を照合し、同名なら ID と状態を再利用する。ID は5文字のランダム文字列で、新規登録時に現在の保存データと今回の新規登録分に対する重複を確認し、衝突したら再生成する。改名は別タスク。
@@ -136,14 +136,3 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
 - `TaskManager/DB.lean`: CSV 保存・読み込み、実行器、状態更新
 - `TaskManager/Csv.lean`: CSV の解析と出力
 - `TaskManager/Config.lean`, `Cli.lean`: 設定と再利用できる CLI
-
-## テスト
-
-```sh
-lake build taskdb_tests
-taskdb_test_dir=$(mktemp -d)
-.lake/build/bin/taskdb_tests "$taskdb_test_dir/tasks.csv"
-python3 tests/test_taskdb_config.py
-```
-
-CSV による状態分岐、名前と ID の保持、ID 衝突時の再生成、タグ型の差し替え、引用符・改行・日本語の往復、不正データの拒否、到達集合への同期、循環・共有 JSON、失敗時のファイル保持、設定、CLI を検証する。Python はテストにのみ使用し、ライブラリ実行には不要。

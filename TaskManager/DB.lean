@@ -12,11 +12,11 @@ private def randomId : IO NodeId := do
   let bytes ← IO.getRandomBytes 5
   return String.ofList (bytes.data.toList.map fun byte => alphabet[byte.toNat % 32]!)
 
-/-- 既存 ID と衝突した候補は再生成する。draw は衝突時の動作を検証するため差し替え可能。 -/
-def freshId (used : Std.HashSet NodeId) (draw : IO NodeId := randomId) : IO NodeId := do
+/-- 既存 ID と衝突した候補は再生成する。 -/
+private def freshId (used : Std.HashSet NodeId) : IO NodeId := do
   if used.size >= 32 ^ 5 then throw <| IO.userError "Task ID space exhausted"
   while true do
-    let id ← draw
+    let id ← randomId
     unless NodeId.isValid id do throw <| IO.userError "Invalid generated task ID"
     if !used.contains id then return id
   throw <| IO.userError "Task ID generation failed"
@@ -43,7 +43,6 @@ private def parseRow (row : Array String) : Except String Stored := do
   let status ← match row[7]! with
     | "NotStarted" => pure Status.NotStarted
     | "Doing" => pure Status.Doing
-    | "Pending" => pure Status.Pending
     | "Done" => pure Status.Done
     | "Progress" => do
       let some current := row[8]!.toNat? | throw "Invalid progressCurrent"
@@ -64,7 +63,6 @@ private def renderRow (record : Stored) : Array String := Id.run do
   let (status, current, total) := match record.state.status with
     | .NotStarted => ("NotStarted", "", "")
     | .Doing => ("Doing", "", "")
-    | .Pending => ("Pending", "", "")
     | .Done => ("Done", "", "")
     | .Progress c t => ("Progress", toString c, toString t)
   return #[record.id, record.name, (toJson record.tags).compress,

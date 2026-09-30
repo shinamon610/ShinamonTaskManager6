@@ -30,7 +30,6 @@ instance : Hashable (MyTask Tag) where
 inductive Status where
   | NotStarted
   | Doing
-  | Pending
   | Done
   | Progress (current total : Nat)
 deriving BEq, Repr, ToJson, FromJson

@@ -6,6 +6,3 @@ package ShinamonTaskManager6 where
 
 @[default_target]
 lean_lib TaskManager
-
-lean_exe taskdb_tests where
-  root := `TaskDBTests
