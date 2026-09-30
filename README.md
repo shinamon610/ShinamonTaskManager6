@@ -26,9 +26,9 @@ inductive MyTag where
   deriving Lean.ToJson, Lean.FromJson
 
 def tasks : TaskProg MyTag Unit := do
-  pushU { name := "テスト" } [
-    push { name := "実装" } [
-      push { name := "設計", tags := [.programming] }
+  pushU (.new "テスト") [
+    push (.new "実装") [
+      push (.new "設計" [.programming])
     ]
   ]
 
@@ -41,7 +41,8 @@ def main (args : List String) : IO UInt32 :=
 `getTaskStatus` / `getTaskState` に到達して初めて DB を読み、その結果で続きを選ぶ。未選択の分岐は実行しない。
 複数ファイルのタスク群は、利用側の `tasks` で呼び出して合成する。
 
-`Task Tag`・`TaskRecord Tag`・`Node Tag`・`Graph Tag` のタグ型は利用側で定義する。`Status` はライブラリ固定の `NotStarted` / `Doing` / `Pending` / `Done` / `Progress current total`。
+`MyTask Tag`・`TaskRecord Tag`・`Node Tag`・`Graph Tag` のタグ型は利用側で定義する。`Status` はライブラリ固定の `NotStarted` / `Doing` / `Pending` / `Done` / `Progress current total`。
+`MyTask.new name tags operator plannedStart plannedEnd details` で定義を作れる。`name` 以外は省略可能で、タグ型は文脈から推論される。担当を指定する `operator` は `assign` フィールドに格納する。
 DB・CLI の実行には `ToJson Tag` / `FromJson Tag` が必要だが、`TaskProg` の構築だけには不要。
 `TaskDB.getTask (Tag := MyTag) path id` / `TaskDB.getTasks (Tag := MyTag) path` のように、返り値から推論できないタグ型は明示する。状態のみを扱う `TaskDB.getState` / `setState` / `setStatus` / `setDone` はタグ型を要求しない。
 
@@ -89,10 +90,10 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
 
 ## データとグラフ
 
-- `Task Tag` は名前・タグ・担当・予定日・詳細を持つ独自型。未使用の `links` フィールドは削除済み。タグに含まれる URL は保存できる。`TaskState` は状態・完了日・結果。
+- `MyTask Tag` は名前・タグ・担当・予定日・詳細を持つ独自型。未使用の `links` フィールドは削除済み。タグに含まれる URL は保存できる。`TaskState` は状態・完了日・結果。
 - 定義は `tasks(id, name, tags, assign, plannedStart, plannedEnd, details)`、現在状態は `task_states(task_id, status, progress_current, progress_total, completed_at, result)` に保存する。`tags` は JSON、状態は通常のカラム。CLI の `state` JSON 出力は維持する。グラフ・辺・状態履歴は保存しない。
 - 登録時は同一トランザクションで状態行も作る。`task_id` は主キーかつ `tasks(id)` への外部キーで、タスク削除時は状態も削除する。各接続で外部キー制約を有効にする。Progress 以外では進捗カラムを NULL にする。
-- `get` / `gets` は Task の全フィールドに `id`・`state` を加えたレコードを返す。`task` の入れ子や名前の重複はない。
+- `get` / `gets` は MyTask の全フィールドに `id`・`state` を加えたレコードを返す。`task` の入れ子や名前の重複はない。
 - ソース実行で名前を照合し、同名なら DB ID と状態を再利用する。ID は自動採番で、手書き不要。改名は別タスク。
 - 初めて状態を読む、またはノードを追加したときに未登録の名前を NotStarted で登録する。状態取得だけではグラフにノードを追加しない。
 - 同じ実行で同名を追加すると同一ノードになる。定義情報はその実行の最初の追加を採用する。

@@ -15,7 +15,7 @@ private inductive TestTag where
   deriving ToJson, FromJson
 
 private def workflow : TaskProg TestTag Unit := do
-  let design : TaskManager.Task TestTag := { name := "設計", tags := [.work], details := "実装の方針を決める" }
+  let design : MyTask TestTag := .new "設計" [.work] (details := "実装の方針を決める")
   if (← getTaskStatus "設計") == .Done then
     if (← getTaskStatus "実装") == .Done then
       pushU { name := "テスト", tags := [.work] } [
@@ -24,7 +24,7 @@ private def workflow : TaskProg TestTag Unit := do
     else
       pushU { name := "実装", tags := [.work] } [push design]
   else
-    pushU { name := "設計の見直し" } [push design]
+    pushU (.new "設計の見直し") [push design]
 
 private def cycle : TaskProg TestTag Unit := do
   let a ← push { name := "A" }
@@ -171,21 +171,24 @@ private def tests (path : System.FilePath) : IO Unit := do
   check (tableNames == #["tasks", "task_states"]) "definition and current state tables only"
 
 private def snapshotTest (path : System.FilePath) : IO Unit := do
-  let original : TaskManager.Task TestTag := {
+  let original : TaskManager.MyTask TestTag := {
     name := "snapshot"
     tags := [.priority 2, .resource (.path "/tmp/book"), .url "https://example.com"]
     assign := some "担当"
     plannedStart := some "2026-09-23"
     plannedEnd := some "2026-10-01"
     details := "詳細\n全文" }
+  let constructed := MyTask.new "snapshot" original.tags (some "担当")
+    (some "2026-09-23") (some "2026-10-01") "詳細\n全文"
+  check (toJson constructed == toJson original) "constructor preserves all definition fields"
   let ((id, removed), _) ← TaskDB.run (Tag := TestTag) path do
     let id ← push original
     let removed ← push { name := "removed" }
     return (id, removed)
-  check (toJson (← TaskDB.getTask (Tag := TestTag) path id).toTask == toJson original) "all task fields roundtrip"
+  check (toJson (← TaskDB.getTask (Tag := TestTag) path id).toMyTask == toJson original) "all task fields roundtrip"
   let state : TaskState := { status := .Done, completedAt := some "2026-09-23", result := "保持" }
   TaskDB.setState path id state
-  let updated : TaskManager.Task TestTag := { original with
+  let updated : TaskManager.MyTask TestTag := { original with
     tags := [], assign := none
     plannedStart := none, plannedEnd := none, details := "更新" }
   let (same, _) ← TaskDB.run (Tag := TestTag) path do
@@ -194,7 +197,7 @@ private def snapshotTest (path : System.FilePath) : IO Unit := do
     return id
   let record ← TaskDB.getTask (Tag := TestTag) path same
   check (same == id && record.name == original.name && record.state == state) "intersection preserves identity and state"
-  check (toJson record.toTask == toJson updated) "metadata replaced including cleared fields; first definition wins"
+  check (toJson record.toMyTask == toJson updated) "metadata replaced including cleared fields; first definition wins"
   expectFailure (discard (TaskDB.getTask (Tag := TestTag) path removed)) "A minus B deleted"
   let before ← TaskDB.getTasks (Tag := TestTag) path
   expectFailure (discard (TaskDB.run (Tag := TestTag) path do
@@ -204,11 +207,11 @@ private def snapshotTest (path : System.FilePath) : IO Unit := do
   check ((← TaskDB.getTasks (Tag := TestTag) path) == before) "failed snapshot preserves metadata, states and membership"
   let (readState, readGraph) ← TaskDB.run (Tag := TestTag) path (getTaskState original.name)
   check (readState == state && readGraph.nodes.isEmpty) "state-only reads remain reachable"
-  check (toJson (← TaskDB.getTask (Tag := TestTag) path id).toTask == toJson updated) "state-only reads preserve full metadata"
+  check (toJson (← TaskDB.getTask (Tag := TestTag) path id).toMyTask == toJson updated) "state-only reads preserve full metadata"
   let (readThenAdded, _) ← TaskDB.run (Tag := TestTag) path do
     discard (getTaskState original.name)
     push original
-  check (readThenAdded == id && toJson (← TaskDB.getTask (Tag := TestTag) path id).toTask == toJson original)
+  check (readThenAdded == id && toJson (← TaskDB.getTask (Tag := TestTag) path id).toMyTask == toJson original)
     "definition after state read replaces metadata"
   let (_, _) ← TaskDB.run (Tag := TestTag) path (pure () : TaskProg TestTag Unit)
   check ((← TaskDB.getTasks (Tag := TestTag) path).isEmpty) "empty snapshot deletes all tasks"
@@ -216,7 +219,7 @@ private def snapshotTest (path : System.FilePath) : IO Unit := do
   check (fresh > removed && (← TaskDB.getState path fresh) == ({} : TaskState)) "reappearance has fresh ID and state"
 
 private def alternateTagTest (path : System.FilePath) : IO Unit := do
-  let task : TaskManager.Task String := { name := "文字列タグ", tags := ["自由なタグ", "引用'\n"] }
+  let task : TaskManager.MyTask String := { name := "文字列タグ", tags := ["自由なタグ", "引用'\n"] }
   let (id, _) ← TaskDB.run path (push task)
   check ((← TaskDB.getTask (Tag := String) path id).tags == task.tags) "independent tag type roundtrip"
 

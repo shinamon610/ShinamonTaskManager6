@@ -5,7 +5,7 @@ namespace TaskManager
 open Lean
 
 /-- ソースで定義するタスク。同一性は name の完全一致。日付は ISO 8601 文字列。 -/
-structure Task (Tag : Type) where
+structure MyTask (Tag : Type) where
   name : String
   tags : List Tag := []
   assign : Option String := none
@@ -14,10 +14,17 @@ structure Task (Tag : Type) where
   details : String := ""
 deriving ToJson, FromJson
 
-instance : BEq (Task Tag) where
+/-- タグ型は利用側から推論する。タスクの定義情報だけを作り、状態は DB で管理する。 -/
+def MyTask.new {Tag : Type} (name : String) (tags : List Tag := [])
+    (operator : Option String := none)
+    (plannedStart : Option String := none) (plannedEnd : Option String := none)
+    (details : String := "") : MyTask Tag :=
+  { name, tags, assign := operator, plannedStart, plannedEnd, details }
+
+instance : BEq (MyTask Tag) where
   beq a b := a.name == b.name
 
-instance : Hashable (Task Tag) where
+instance : Hashable (MyTask Tag) where
   hash task := hash task.name
 
 inductive Status where
@@ -38,18 +45,18 @@ deriving BEq, Repr, ToJson, FromJson
 /-- DB が自動採番する永続的なタスク ID。ソースでは手書きしない。 -/
 abbrev NodeId := Nat
 
-structure TaskRecord (Tag : Type) extends Task Tag where
+structure TaskRecord (Tag : Type) extends MyTask Tag where
   id : NodeId
   state : TaskState
 deriving ToJson
 
 instance [ToJson Tag] : BEq (TaskRecord Tag) where
   beq a b := a.id == b.id && a.name == b.name &&
-    toJson a.toTask == toJson b.toTask && a.state == b.state
+    toJson a.toMyTask == toJson b.toMyTask && a.state == b.state
 
 structure Node (Tag : Type) where
   id : NodeId
-  task : Task Tag
+  task : MyTask Tag
   state : TaskState
 deriving ToJson
 
