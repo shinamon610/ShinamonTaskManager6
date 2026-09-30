@@ -42,8 +42,12 @@ structure TaskState where
   result : String := ""
 deriving BEq, Repr, ToJson, FromJson
 
-/-- DB が自動採番する永続的なタスク ID。ソースでは手書きしない。 -/
-abbrev NodeId := Nat
+/-- 新規登録時に生成する5文字のランダム ID。同名タスクは既存 ID を引き継ぐ。 -/
+abbrev NodeId := String
+
+def NodeId.isValid (id : NodeId) : Bool :=
+  id.length == 5 && id.toList.all (fun c =>
+    ('a' <= c && c <= 'z') || ('2' <= c && c <= '7'))
 
 structure TaskRecord (Tag : Type) extends MyTask Tag where
   id : NodeId

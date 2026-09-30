@@ -6,7 +6,7 @@ namespace TaskManager
 open Lean
 
 private def usage : String :=
-  "Usage:\n  taskdb [--config FILE] [graph]\n  taskdb [--config FILE] gets\n  taskdb [--config FILE] get ID\n  taskdb [--config FILE] set ID ns|doing|pending\n  taskdb [--config FILE] set ID done [RESULT]\n  taskdb [--config FILE] set ID progress CURRENT TOTAL\n\nDefault config: ./taskdb.json (sqlitePath, relative to the config file).\nThe database is always loaded from the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
+  "Usage:\n  taskdb [--config FILE] [graph]\n  taskdb [--config FILE] gets\n  taskdb [--config FILE] get ID\n  taskdb [--config FILE] set ID ns|doing|pending\n  taskdb [--config FILE] set ID done [RESULT]\n  taskdb [--config FILE] set ID progress CURRENT TOTAL\n\nDefault config: ./taskdb.json (csvPath, relative to the config file).\nThe database is always loaded from the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
 namespace Cli
 
 /-- DB の指定方法。設定解決後に文字列の引数列を組み直さない。 -/
@@ -27,9 +27,8 @@ structure Request where
   command : Command
 
 private def parseId (text : String) : IO NodeId := do
-  if let some id := text.toNat? then
-    if id > 0 && id <= 9223372036854775807 then return id
-  throw <| IO.userError "ID must be a positive SQLite integer"
+  if NodeId.isValid text then return text
+  throw <| IO.userError "ID must be 5 characters from a-z and 2-7"
 
 private def parseStatus (text : String) : IO Status :=
   match text with
@@ -42,8 +41,8 @@ private def parseStatus (text : String) : IO Status :=
 private def parseProgress (current total : String) : IO Status := do
   match current.toNat?, total.toNat? with
   | some c, some t =>
-    if t == 0 || c > t || t > 9223372036854775807 then
-      throw <| IO.userError "Progress requires 0 <= CURRENT <= TOTAL <= 9223372036854775807 and TOTAL > 0"
+    if t == 0 || c > t then
+      throw <| IO.userError "Progress requires 0 <= CURRENT <= TOTAL and TOTAL > 0"
     return .Progress c t
   | _, _ => throw <| IO.userError "Progress requires natural numbers"
 

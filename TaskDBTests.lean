@@ -48,34 +48,31 @@ private def idOf (path : System.FilePath) (name : String) : IO NodeId := do
     | throw <| IO.userError s!"Missing test task: {name}"
   return record.id
 
-private def refJson (id : Nat) (name : String) : Json :=
+private def refJson (id : NodeId) (name : String) : Json :=
   Json.mkObj [("id", toJson id), ("name", toJson name)]
 
-private def nodeJson (id : Nat) (name : String) (dependents : Array Json := #[]) : Json :=
+private def nodeJson (id : NodeId) (name : String) (dependents : Array Json := #[]) : Json :=
   (refJson id name).mergeObj (Json.mkObj [("dependents", .arr dependents)])
 
 private def registered (path : System.FilePath) (name : String) : IO Bool := do
-  let db ← SQLite.openWith path .readonly
-  let query ← db.prepare "SELECT 1 FROM tasks WHERE name = ?"
-  query.bindText 1 name
-  query.step
+  return (← TaskDB.getTasks (Tag := Json) path).any (·.name == name)
 
 private def tests (path : System.FilePath) : IO Unit := do
-  expectFailure (discard (TaskDB.getTask (Tag := TestTag) path 999999)) "get must not create DB"
+  expectFailure (discard (TaskDB.getTask (Tag := TestTag) path "!!!!!")) "get must not create DB"
   expectFailure (discard (TaskDB.getTasks (Tag := TestTag) path)) "gets must not create DB"
-  expectFailure (TaskDB.setStatus path 999999 .Done) "set must not create DB"
-  expectFailure (TaskDB.setState path 999999 {}) "set-state must not create DB"
+  expectFailure (TaskDB.setStatus path "!!!!!" .Done) "set must not create DB"
+  expectFailure (TaskDB.setState path "!!!!!" {}) "set-state must not create DB"
   check (!(← path.pathExists)) "read/update must leave missing DB absent"
 
   let (_, emptyGraph) ← TaskDB.run (Tag := TestTag) path (pure () : TaskProg TestTag Unit)
   check ((← TaskDB.getTasks (Tag := TestTag) path).isEmpty) "gets on empty database"
   check (toJson emptyGraph == Json.arr #[]) "empty JSON"
-  expectFailure (discard (TaskDB.getTask (Tag := TestTag) path 999999)) "unknown get"
-  expectFailure (TaskDB.setStatus path 999999 .Done) "unknown set"
-  expectFailure (TaskDB.setState path 999999 {}) "unknown set-state"
+  expectFailure (discard (TaskDB.getTask (Tag := TestTag) path "!!!!!")) "unknown get"
+  expectFailure (TaskDB.setStatus path "!!!!!" .Done) "unknown set"
+  expectFailure (TaskDB.setState path "!!!!!" {}) "unknown set-state"
   check ((← TaskDB.getTasks (Tag := TestTag) path).isEmpty) "unknown IDs must not register"
-  expectFailure (TaskDB.setState path 0 {}) "zero ID"
-  expectFailure (TaskDB.setState path 9223372036854775808 {}) "overflow ID"
+  expectFailure (TaskDB.setState path "" {}) "zero ID"
+  expectFailure (TaskDB.setState path "toolong" {}) "overflow ID"
 
   let (status, onlyState) ← TaskDB.run (Tag := TestTag) path (getTaskStatus "状態のみ")
   check (status == .NotStarted && onlyState.nodes.isEmpty) "on-demand state read"
@@ -95,11 +92,10 @@ private def tests (path : System.FilePath) : IO Unit := do
   let implementId ← idOf path "実装"
   expectFailure (TaskDB.setStatus path implementId (.Progress 3 2)) "invalid progress"
   expectFailure (TaskDB.setState path implementId { status := .Progress 0 0 }) "zero total"
-  expectFailure (TaskDB.setStatus path implementId (.Progress 0 9223372036854775808)) "progress overflow"
-  TaskDB.setStatus path implementId (.Progress 9223372036854775807 9223372036854775807)
-  check ((← TaskDB.getState path implementId).status == .Progress 9223372036854775807 9223372036854775807) "maximum SQLite progress roundtrip"
+  TaskDB.setStatus path implementId (.Progress 9223372036854775808 9223372036854775808)
+  check ((← TaskDB.getState path implementId).status == .Progress 9223372036854775808 9223372036854775808) "large natural progress roundtrip"
   let beforeInvalid ← TaskDB.getState path implementId
-  expectFailure (TaskDB.setState path implementId { status := .Progress 9223372036854775808 9223372036854775808 }) "overflow current and total"
+  expectFailure (TaskDB.setState path implementId { status := .Progress 4 3 }) "invalid current and total"
   check ((← TaskDB.getState path implementId) == beforeInvalid) "invalid update preserves state"
   TaskDB.setStatus path implementId (.Progress 2 5)
   let (_, progress) ← TaskDB.run (Tag := TestTag) path workflow
@@ -150,11 +146,9 @@ private def tests (path : System.FilePath) : IO Unit := do
   let (quoteId, _) ← TaskDB.run (Tag := TestTag) path (push { name := quoted })
   let expected : TaskState := { status := .Pending, result := "引用 \" と改行\n" }
   TaskDB.setState path quoteId expected
-  check ((← TaskDB.getState path quoteId) == expected) "parameter binding and JSON roundtrip"
+  check ((← TaskDB.getState path quoteId) == expected) "CSV state roundtrip"
 
-  let db ← SQLite.open path
-  db.exec "INSERT INTO tasks(name, tags) VALUES ('unread', '[123]')"
-  db.exec "INSERT INTO task_states(task_id) SELECT id FROM tasks WHERE name = 'unread'"
+  discard (TaskDB.run (Tag := Json) path (push { name := "unread", tags := [toJson (123 : Nat)] }))
   let (_, lazyGraph) ← TaskDB.run (Tag := TestTag) path do
     if (← getTaskStatus "設計") == .Done then
       discard (getTaskStatus "unread")
@@ -163,22 +157,18 @@ private def tests (path : System.FilePath) : IO Unit := do
   check (names lazyGraph == #["選ばれた枝"]) "unselected read must not run"
   expectFailure (discard (TaskDB.run (Tag := TestTag) path do
     let id ← push { name := "rollback" }
-    addEdge id 999999)) "invalid edge"
+    addEdge id "!!!!!")) "invalid edge"
   check (!(← registered path "rollback")) "rollback registration"
-  let tables ← db.prepare "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-  let mut tableNames := #[]
-  while ← tables.step do tableNames := tableNames.push (← tables.columnText 0)
-  check (tableNames == #["tasks", "task_states"]) "definition and current state tables only"
 
 private def snapshotTest (path : System.FilePath) : IO Unit := do
   let original : TaskManager.MyTask TestTag := {
     name := "snapshot"
     tags := [.priority 2, .resource (.path "/tmp/book"), .url "https://example.com"]
-    assign := some "担当"
+    assign := some ""
     plannedStart := some "2026-09-23"
     plannedEnd := some "2026-10-01"
     details := "詳細\n全文" }
-  let constructed := MyTask.new "snapshot" original.tags (some "担当")
+  let constructed := MyTask.new "snapshot" original.tags (some "")
     (some "2026-09-23") (some "2026-10-01") "詳細\n全文"
   check (toJson constructed == toJson original) "constructor preserves all definition fields"
   let ((id, removed), _) ← TaskDB.run (Tag := TestTag) path do
@@ -203,7 +193,7 @@ private def snapshotTest (path : System.FilePath) : IO Unit := do
   expectFailure (discard (TaskDB.run (Tag := TestTag) path do
     discard (push original)
     let newId ← push { name := "failed" }
-    addEdge newId 999999)) "failed snapshot"
+    addEdge newId "!!!!!")) "failed snapshot"
   check ((← TaskDB.getTasks (Tag := TestTag) path) == before) "failed snapshot preserves metadata, states and membership"
   let (readState, readGraph) ← TaskDB.run (Tag := TestTag) path (getTaskState original.name)
   check (readState == state && readGraph.nodes.isEmpty) "state-only reads remain reachable"
@@ -216,12 +206,39 @@ private def snapshotTest (path : System.FilePath) : IO Unit := do
   let (_, _) ← TaskDB.run (Tag := TestTag) path (pure () : TaskProg TestTag Unit)
   check ((← TaskDB.getTasks (Tag := TestTag) path).isEmpty) "empty snapshot deletes all tasks"
   let (fresh, _) ← TaskDB.run (Tag := TestTag) path (push original)
-  check (fresh > removed && (← TaskDB.getState path fresh) == ({} : TaskState)) "reappearance has fresh ID and state"
+  check (NodeId.isValid fresh && (← TaskDB.getState path fresh) == ({} : TaskState)) "reappearance has fresh ID and state"
 
 private def alternateTagTest (path : System.FilePath) : IO Unit := do
   let task : TaskManager.MyTask String := { name := "文字列タグ", tags := ["自由なタグ", "引用'\n"] }
   let (id, _) ← TaskDB.run path (push task)
   check ((← TaskDB.getTask (Tag := String) path id).tags == task.tags) "independent tag type roundtrip"
+
+private def csvAndIdTests (path : System.FilePath) : IO Unit := do
+  let cells := #[#["", "日本語,引用\"", "line1\r\nline2", "\"", "末尾", ""]]
+  check ((← IO.ofExcept (Csv.parse (Csv.render cells))) == cells) "CSV quoting and multiline roundtrip"
+  check ((← IO.ofExcept (Csv.parse "a,b\r\nc,d\n")) == #[#["a", "b"], #["c", "d"]]) "CSV CRLF and LF"
+  check ((Csv.parse "\"unterminated").toOption.isNone) "unterminated quote rejected"
+  check ((Csv.parse "a\"b").toOption.isNone) "bare quote rejected"
+  check ((Csv.parse "\"a\"x").toOption.isNone) "trailing quote junk rejected"
+  let calls ← IO.mkRef (0 : Nat)
+  let draw := do
+    let n ← calls.get
+    calls.set (n + 1)
+    return if n < 2 then "aaaaa" else "bbbbb"
+  let used : Std.HashSet NodeId := ({} : Std.HashSet NodeId).insert "aaaaa"
+  let id ← TaskDB.freshId used draw
+  check (id == "bbbbb" && (← calls.get) == 3) "ID collision retries"
+  expectFailure (discard (TaskDB.run (Tag := TestTag) path do
+    let id ← push { name := "failed creation" }
+    addEdge id "!!!!!")) "invalid fresh graph"
+  check (!(← path.pathExists)) "failed execution must not create CSV"
+  let (_, graph) ← TaskDB.run (Tag := TestTag) path do
+    for i in [0:500] do
+      pushU (.new s!"task {i}")
+  let ids := graph.nodes.map (·.id)
+  check (ids.all NodeId.isValid) "five character IDs"
+  check ((ids.foldl (fun (s : Std.HashSet String) id => s.insert id) {}).size == ids.size)
+    "all registered IDs are unique"
 
 def main (args : List String) : IO UInt32 := do
   if let "--cli" :: cliArgs := args then
@@ -230,6 +247,7 @@ def main (args : List String) : IO UInt32 := do
     let [path] := args | throw <| IO.userError "Usage: taskdb_tests NEW_DB_PATH"
     if (← System.FilePath.pathExists path) then
       throw <| IO.userError "Use a new database path for tests"
+    csvAndIdTests (path ++ ".ids")
     tests path
     snapshotTest (path ++ ".snapshot")
     alternateTagTest (path ++ ".alternate")
