@@ -26,9 +26,9 @@ private def header : Array String := #[
   "status", "progressCurrent", "progressTotal", "completedAt", "result"]
 
 private def validateStatus (status : Status) : Except String Unit := do
-  if let .Progress current total := status then
+  if let .Doing current total := status then
     if total == 0 || current > total then
-      throw "Progress requires 0 <= CURRENT <= TOTAL and TOTAL > 0"
+      throw "Doing requires 0 <= CURRENT <= TOTAL and TOTAL > 0"
 
 private def parseJson [FromJson α] (value : String) : Except String α :=
   Json.parse value >>= fromJson?
@@ -42,17 +42,16 @@ private def parseRow (row : Array String) : Except String Stored := do
   unless NodeId.isValid id do throw s!"Invalid task ID: {id}"
   let status ← match row[7]! with
     | "NotStarted" => pure Status.NotStarted
-    | "Doing" => pure Status.Doing
     | "Done" => pure Status.Done
-    | "Progress" => do
+    | "Doing" => do
       let some current := row[8]!.toNat? | throw "Invalid progressCurrent"
       let some total := row[9]!.toNat? | throw "Invalid progressTotal"
-      pure (.Progress current total)
+      pure (.Doing current total)
     | other => throw s!"Invalid status: {other}"
   validateStatus status
-  unless status matches .Progress .. do
+  unless status matches .Doing .. do
     unless row[8]!.isEmpty && row[9]!.isEmpty do
-      throw "Progress columns must be empty for non-Progress status"
+      throw "Progress columns must be empty unless status is Doing"
   return {
     id, name := row[1]!, tags := ← parseJson row[2]!,
     assign := ← parseJson row[3]!, plannedStart := ← parseJson row[4]!,
@@ -62,9 +61,8 @@ private def parseRow (row : Array String) : Except String Stored := do
 private def renderRow (record : Stored) : Array String := Id.run do
   let (status, current, total) := match record.state.status with
     | .NotStarted => ("NotStarted", "", "")
-    | .Doing => ("Doing", "", "")
     | .Done => ("Done", "", "")
-    | .Progress c t => ("Progress", toString c, toString t)
+    | .Doing c t => ("Doing", toString c, toString t)
   return #[record.id, record.name, (toJson record.tags).compress,
     (toJson record.assign).compress, (toJson record.plannedStart).compress,
     (toJson record.plannedEnd).compress, record.details, status, current, total,
@@ -194,13 +192,36 @@ private def interpret [ToJson Tag] (program : TaskProg Tag α) : StateT (Executi
     modify fun s => { s with graph := { graph with edges := graph.edges.push { source, target } } }
     interpret next
 
+/-- 全ての辺を構築してから、前提が全て完了した未着手タスクを Doing 0 100 にする。 -/
+private def startReadyTasks (s : Execution Tag) : Execution Tag := Id.run do
+  let done := s.graph.nodes.foldl (fun (ids : Std.HashSet NodeId) node =>
+    if node.state.status == .Done then ids.insert node.id else ids) {}
+  -- source が target に依存する。未完了の前提を一つでも持つタスクは開始しない。
+  let blocked := s.graph.edges.foldl (fun (ids : Std.HashSet NodeId) edge =>
+    if done.contains edge.target then ids else ids.insert edge.source) {}
+  let started := s.graph.nodes.foldl (fun (ids : Std.HashSet NodeId) node =>
+    if node.state.status == .NotStarted && !blocked.contains node.id then
+      ids.insert node.id
+    else ids) {}
+  let nodes := s.graph.nodes.map fun node =>
+    if started.contains node.id then
+      { node with state := { node.state with status := .Doing 0 100 } }
+    else node
+  let records := s.records.map fun record =>
+    if started.contains record.id then
+      { record with state := { record.state with status := .Doing 0 100 } }
+    else record
+  return { s with graph := { s.graph with nodes }, records }
+
 /--
 CSV を読み込み、定義をメモリ上で実行し、成功した場合のみ到達集合を保存する。
 状態参照だけの名前も残すため、グラフとは別に reached を管理する。
 同名は ID と状態を引き継ぎ、定義情報は実行中の最初の追加を採用する。
+グラフ構築後に、前提が全て Done の NotStarted タスクを Doing 0 100 にして保存・出力する。
 -/
 def run [ToJson Tag] (path : System.FilePath) (program : TaskProg Tag α) : IO (α × Graph Tag) := do
   let (value, s) ← (interpret program).run (initial (← load path true))
+  let s := startReadyTasks s
   save path (s.records.filter fun record => s.reached.contains record.name)
   return (value, s.graph)
 

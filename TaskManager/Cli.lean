@@ -6,7 +6,7 @@ namespace TaskManager
 open Lean
 
 private def usage : String :=
-  "Usage:\n  taskdb [--config FILE] [graph]\n  taskdb [--config FILE] gets\n  taskdb [--config FILE] get ID\n  taskdb [--config FILE] set ID ns|doing\n  taskdb [--config FILE] set ID done [RESULT]\n  taskdb [--config FILE] set ID progress CURRENT TOTAL\n\nDefault config: ./taskdb.json (csvPath, relative to the config file).\nThe database is always loaded from the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
+  "Usage:\n  taskdb [--config FILE] [graph]\n  taskdb [--config FILE] gets\n  taskdb [--config FILE] get ID\n  taskdb [--config FILE] set ID ns|doing\n  taskdb [--config FILE] set ID done [RESULT]\n  taskdb [--config FILE] set ID Doing CURRENT TOTAL\n\nDefault config: ./taskdb.json (csvPath, relative to the config file).\nThe database is always loaded from the config.\ndone records the current UTC time; omit RESULT to keep the existing result.\ngraph builds the graph using DB states and prints JSON.\ngets lists all registered tasks; get/set use their database IDs."
 namespace Cli
 
 /-- DB の指定方法。設定解決後に文字列の引数列を組み直さない。 -/
@@ -33,17 +33,17 @@ private def parseId (text : String) : IO NodeId := do
 private def parseStatus (text : String) : IO Status :=
   match text with
   | "ns" => pure .NotStarted
-  | "doing" => pure .Doing
+  | "doing" | "Doing" => pure (.Doing 0 100)
   | "done" => pure .Done
   | _ => throw <| IO.userError s!"Unknown status: {text}"
 
-private def parseProgress (current total : String) : IO Status := do
+private def parseDoing (current total : String) : IO Status := do
   match current.toNat?, total.toNat? with
   | some c, some t =>
     if t == 0 || c > t then
-      throw <| IO.userError "Progress requires 0 <= CURRENT <= TOTAL and TOTAL > 0"
-    return .Progress c t
-  | _, _ => throw <| IO.userError "Progress requires natural numbers"
+      throw <| IO.userError "Doing requires 0 <= CURRENT <= TOTAL and TOTAL > 0"
+    return .Doing c t
+  | _, _ => throw <| IO.userError "Doing requires natural numbers"
 
 /-- 外部の文字列表現を扱う境界。以降の設定解決・実行は ADT のみで分岐する。 -/
 def parse (args : List String) : IO Request := do
@@ -57,8 +57,8 @@ def parse (args : List String) : IO Request := do
   | ["get", id] => return ⟨defaultDB, .get (← parseId id)⟩
   | ["set", id, status] => return ⟨defaultDB, .set (← parseId id) (← parseStatus status)⟩
   | ["set", id, "done", result] => return ⟨defaultDB, .done (← parseId id) (some result)⟩
-  | ["set", id, "progress", current, total] =>
-    return ⟨defaultDB, .set (← parseId id) (← parseProgress current total)⟩
+  | ["set", id, "doing", current, total] | ["set", id, "Doing", current, total] =>
+    return ⟨defaultDB, .set (← parseId id) (← parseDoing current total)⟩
   | ["--help"] | ["-h"] => return ⟨defaultDB, .help⟩
   | _ => throw <| IO.userError usage
 

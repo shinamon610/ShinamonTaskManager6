@@ -43,7 +43,7 @@ def main (args : List String) : IO UInt32 :=
 実行開始時に CSV 全体を読み込む。`getTaskStatus` / `getTaskState` に到達したときにメモリ上の状態を参照し、その結果で続きを選ぶ。未選択の分岐は実行・登録しない。
 複数ファイルのタスク群は、利用側の `tasks` で呼び出して合成する。
 
-`MyTask Tag`・`TaskRecord Tag`・`Node Tag`・`Graph Tag` のタグ型は利用側で定義する。`Status` はライブラリ固定の `NotStarted` / `Doing` / `Done` / `Progress current total`。
+`MyTask Tag`・`TaskRecord Tag`・`Node Tag`・`Graph Tag` のタグ型は利用側で定義する。`Status` はライブラリ固定の `NotStarted` / `Doing current total` / `Done`。
 `MyTask.new name tags operator plannedStart plannedEnd details` で定義を作れる。`name` 以外は省略可能で、タグ型は文脈から推論される。担当を指定する `operator` は `assign` フィールドに格納する。
 `run` / `setTaskStatus` には `ToJson Tag`、`getTask` / `getTasks` には `FromJson Tag`、CLI には両方が必要。`TaskProg` の構築だけには不要。
 `TaskDB.getTask (Tag := MyTag) path id` / `TaskDB.getTasks (Tag := MyTag) path` のように、返り値から推論できないタグ型は明示する。状態のみを扱う `TaskDB.getState` / `setState` / `setStatus` / `setDone` はタグ型を要求しない。
@@ -81,8 +81,8 @@ lean_exe todo where
 | `graph` | ソースの定義を実行してグラフを JSON 出力 |
 | `gets` | CSV 内の全タスクを ID の辞書順に JSON 配列で出力 |
 | `get ID` | 1件の ID・名前・状態を出力 |
-| `set ID ns/doing` | 状態を更新（2つのうち1つを指定） |
-| `set ID progress CURRENT TOTAL` | 進捗を更新 |
+| `set ID ns/doing` | 未着手、または `Doing 0 100` に更新 |
+| `set ID Doing CURRENT TOTAL` | `Doing` の current・total を指定値で上書き（小文字 `doing` も可） |
 | `set ID done [RESULT]` | 完了にして UTC の完了日時を自動設定 |
 
 ID は `a-z` と `2-7` からなる5文字の文字列（例: `k3mqp`）。`set k3mqp done` のように指定する。
@@ -101,12 +101,13 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
   id,name,tags,assign,plannedStart,plannedEnd,details,status,progressCurrent,progressTotal,completedAt,result
   ```
 
-- `tags` は JSON 配列。`assign` / `plannedStart` / `plannedEnd` / `completedAt` は JSON の `null` または文字列をセルに格納する。これにより未指定と空文字を区別する。`status` は `NotStarted` / `Doing` / `Done` / `Progress`。Progress 以外では進捗セルを空にする。
+- `tags` は JSON 配列。`assign` / `plannedStart` / `plannedEnd` / `completedAt` は JSON の `null` または文字列をセルに格納する。これにより未指定と空文字を区別する。`status` は `NotStarted` / `Doing` / `Done`。`Doing` の current・total は `progressCurrent`・`progressTotal` セルに保存し、それ以外では空にする。
 - 不正な CSV、重複した ID・名前、不正な状態や進捗はエラーにし、ファイルを上書きしない。
 - `get` / `gets` は MyTask の全フィールドに `id`・`state` を加えたレコードを返す。`task` の入れ子や名前の重複はない。
 - ソース実行で名前を照合し、同名なら ID と状態を再利用する。ID は5文字のランダム文字列で、新規登録時に現在の保存データと今回の新規登録分に対する重複を確認し、衝突したら再生成する。改名は別タスク。
 - 初めて状態を読む、またはノードを追加したときに未登録の名前を NotStarted で登録する。状態取得だけではグラフにノードを追加しない。
 - 同じ実行で同名を追加すると同一ノードになる。定義情報はその実行の最初の追加を採用する。
+- `graph`（引数なしも同じ）では、グラフを構築した後、前提がない、または直接の前提がすべて `Done` の `NotStarted` タスクを自動で `Doing 0 100` にし、CSV に保存して出力する。`Done` と既存の `Doing current total` は維持する。状態を読んだだけでグラフに追加していないタスクは変更しない。定義内の分岐は自動更新前の状態で決まり、自動更新後の再実行はしない。
 - `run` は今回到達した集合 B に DB を同期する。以前の集合 A に対し、A−B は削除、A∩B は ID・名前・状態を保持して定義情報を更新、B−A は新規登録する。空の集合なら全件削除する。
 - 到達集合には状態を読むだけの名前も含む。その場合、既存の定義情報を保持し、新規なら名前以外を既定値で登録する。後でノードを追加した場合はその定義情報を保存する。
 - 到達集合は Lean の `Std.HashSet String` で管理する。一時テーブルは不要。
@@ -123,7 +124,8 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
 - 直接の依存先に未完了のタスクがある場合の更新（自己依存や未完了の循環も含む）。
 - Done から未完了の状態への変更。Done の再実行は許可する。
 
-未完了の状態間の変更は、上記の条件を満たせば許可する。Progress の CURRENT は 0 以上 TOTAL 以下、TOTAL は正数とする。SQLite 由来の64ビット上限はなく、Lean の自然数として扱う。低水準の状態更新 API でも検証する。
+未完了の状態間の変更は、上記の条件を満たせば許可する。Doing の CURRENT は 0 以上 TOTAL 以下、TOTAL は正数とする。SQLite 由来の64ビット上限はなく、Lean の自然数として扱う。低水準の状態更新 API でも検証する。
+`CURRENT = TOTAL` でも自動で `Done` にはしない。完了には明示的な `set ID done` が必要。`set ID Doing 20 100` のように指定した数値は、次回の `graph` でも保持する。
 検証に失敗した場合は、グラフ構築中に登録・更新した内容も保存しない。
 `set` の検証中も到達した定義情報を保存するが、集合の削除同期は `run`（CLI の引数なし実行 / `graph`）で行う。
 ライブラリの低水準 API `setState` / `setStatus` / `setDone` はグラフを検証しない。CLI と同じ検証には `setTaskStatus` にタスク定義を渡す。

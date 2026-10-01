@@ -29,9 +29,8 @@ instance : Hashable (MyTask Tag) where
 
 inductive Status where
   | NotStarted
-  | Doing
+  | Doing (current total : Nat)
   | Done
-  | Progress (current total : Nat)
 deriving BEq, Repr, ToJson, FromJson
 
 /-- DB が管理する情報。タスク定義には埋め込まない。 -/
