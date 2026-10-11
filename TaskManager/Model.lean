@@ -67,7 +67,7 @@ structure Edge where
   target : NodeId
 deriving BEq, ToJson
 
-/-- 内部表現。JSON では依存先から後続へ dependents の入れ子で表示する。 -/
+/-- 内部表現。JSON では依存元から依存先へ dependencies の入れ子で表示する。 -/
 structure Graph (Tag : Type) where
   nodes : Array (Node Tag) := #[]
   edges : Array Edge := #[]
@@ -78,23 +78,23 @@ private partial def renderNode (graph : Graph Tag) (node : Node Tag) : StateM (L
   if (← get).contains node.id then
     return Json.mkObj fields
   modify (node.id :: ·)
-  let mut dependents := #[]
+  let mut dependencies := #[]
   for edge in graph.edges do
-    if edge.target == node.id then
-      if let some dependent := graph.nodes.find? (·.id == edge.source) then
-        dependents := dependents.push (← renderNode graph dependent)
-  return Json.mkObj (fields ++ [("dependents", .arr dependents)])
+    if edge.source == node.id then
+      if let some dependency := graph.nodes.find? (·.id == edge.target) then
+        dependencies := dependencies.push (← renderNode graph dependency)
+  return Json.mkObj (fields ++ [("dependencies", .arr dependencies)])
 
 /--
-依存先を持たないタスクから後続へ展開する（既存 toEdges と同じ向き）。
-再登場するノードは id/name/status を表示し、dependents の再展開はしない。
+他のタスクから依存されていないタスクから依存先へ展開する（push の入れ子と同じ向き）。
+再登場するノードは id/name/status を表示し、dependencies の再展開はしない。
 根のない循環成分も、未表示のノードを入口にして必ず出力する。
 -/
 def Graph.toDependencyJson (graph : Graph Tag) : Json := Id.run do
   let render : StateM (List NodeId) Json := do
     let mut roots := #[]
     for node in graph.nodes do
-      if !(graph.edges.any (·.source == node.id)) then
+      if !(graph.edges.any (·.target == node.id)) then
         roots := roots.push (← renderNode graph node)
     for node in graph.nodes do
       if !(← get).contains node.id then
