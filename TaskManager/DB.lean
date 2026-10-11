@@ -192,36 +192,14 @@ private def interpret [ToJson Tag] (program : TaskProg Tag α) : StateT (Executi
     modify fun s => { s with graph := { graph with edges := graph.edges.push { source, target } } }
     interpret next
 
-/-- 全ての辺を構築してから、前提が全て完了した未着手タスクを Doing 0 100 にする。 -/
-private def startReadyTasks (s : Execution Tag) : Execution Tag := Id.run do
-  let done := s.graph.nodes.foldl (fun (ids : Std.HashSet NodeId) node =>
-    if node.state.status == .Done then ids.insert node.id else ids) {}
-  -- source が target に依存する。未完了の前提を一つでも持つタスクは開始しない。
-  let blocked := s.graph.edges.foldl (fun (ids : Std.HashSet NodeId) edge =>
-    if done.contains edge.target then ids else ids.insert edge.source) {}
-  let started := s.graph.nodes.foldl (fun (ids : Std.HashSet NodeId) node =>
-    if node.state.status == .NotStarted && !blocked.contains node.id then
-      ids.insert node.id
-    else ids) {}
-  let nodes := s.graph.nodes.map fun node =>
-    if started.contains node.id then
-      { node with state := { node.state with status := .Doing 0 100 } }
-    else node
-  let records := s.records.map fun record =>
-    if started.contains record.id then
-      { record with state := { record.state with status := .Doing 0 100 } }
-    else record
-  return { s with graph := { s.graph with nodes }, records }
-
 /--
 CSV を読み込み、定義をメモリ上で実行し、成功した場合のみ到達集合を保存する。
 状態参照だけの名前も残すため、グラフとは別に reached を管理する。
 同名は ID と状態を引き継ぎ、定義情報は実行中の最初の追加を採用する。
-グラフ構築後に、前提が全て Done の NotStarted タスクを Doing 0 100 にして保存・出力する。
+タスクの状態を自動変更せず、保存・出力する。
 -/
 def run [ToJson Tag] (path : System.FilePath) (program : TaskProg Tag α) : IO (α × Graph Tag) := do
   let (value, s) ← (interpret program).run (initial (← load path true))
-  let s := startReadyTasks s
   save path (s.records.filter fun record => s.reached.contains record.name)
   return (value, s.graph)
 
