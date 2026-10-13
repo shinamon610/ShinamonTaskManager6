@@ -1,4 +1,5 @@
 import TaskManager.Program
+import TaskManager.Dependency
 import TaskManager.Csv
 import Std.Time
 
@@ -214,12 +215,17 @@ def setTaskStatus [ToJson Tag] (path : System.FilePath)
     throw <| IO.userError s!"Task {id} is not in the current graph"
   if oldState.status == .Done && status != .Done then
     throw <| IO.userError s!"Task {id} is already done and cannot return to an incomplete status"
-  for edge in s.graph.edges do
-    if edge.source == id then
-      let some dependency := s.graph.nodes.find? (·.id == edge.target)
-        | throw <| IO.userError s!"Missing dependency: {edge.target}"
-      unless dependency.state.status == .Done do
-        throw <| IO.userError s!"Task {id} requires completed dependency {dependency.id} ({dependency.task.name})"
+  if status == .Done then
+    match s.graph.checkDoneable id with
+    | .ok () => pure ()
+    | .error message => throw <| IO.userError message
+  else
+    for edge in s.graph.edges do
+      if edge.source == id then
+        let some dependency := s.graph.nodes.find? (·.id == edge.target)
+          | throw <| IO.userError s!"Missing dependency: {edge.target}"
+        unless dependency.state.status == .Done do
+          throw <| IO.userError s!"Task {id} requires completed dependency {dependency.id} ({dependency.task.name})"
   let state ← if status == .Done then completed oldState result else pure { oldState with status }
   save path (← withState s.records id state)
 

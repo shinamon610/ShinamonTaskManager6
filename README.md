@@ -121,8 +121,17 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
 `set` は現在のタスク定義からグラフを構築し、以下の更新をエラーにする。
 
 - 現在のグラフにないタスクへの更新。
-- 直接の依存先に未完了のタスクがある場合の更新（自己依存や未完了の循環も含む）。
+- 未完了状態への更新で、直接の依存先に未完了のタスクがある場合。
+- `Done` への更新で、以下の完了条件を満たさない場合。
 - Done から未完了の状態への変更。Done の再実行は許可する。
+
+未完了タスクを `Done` にするには、指定したタスク自身が次の三条件をすべて満たす必要がある。
+
+1. 元のグラフで所属する強連結成分（SCC）が直接依存する外部 SCC の全タスクが `Done`。
+2. `Done` のノードと接続する辺を除いたグラフで、所属する SCC の外に未完了の依存先がない。
+3. その未完了 SCC 内に `Done` の直接依存先を持つノードが存在するなら、指定タスク自身も `Done` の直接依存先を持つ。
+
+判定は更新前の状態で行う。閉じた循環は最初の一つを任意に完了でき、その後は完了済みノードを除いて判定し直す。開始位置の保存や他タスクの自動完了は行わない。
 
 未完了の状態間の変更は、上記の条件を満たせば許可する。Doing の CURRENT は 0 以上 TOTAL 以下、TOTAL は正数とする。SQLite 由来の64ビット上限はなく、Lean の自然数として扱う。低水準の状態更新 API でも検証する。
 `CURRENT = TOTAL` でも自動で `Done` にはしない。完了には明示的な `set ID done` が必要。`set ID Doing 20 100` のように指定した数値は、次回の `graph` でも保持する。
@@ -135,6 +144,7 @@ CLI の文字列引数は入口の `Cli.parse` で `Command` / `DatabaseSource` 
 - `TaskManager.lean`: 公開 import 入口
 - `TaskManager/Model.lean`: データ型（具体的タグ型は利用側）
 - `TaskManager/Program.lean`: 操作型・Monad・push 等
+- `TaskManager/Dependency.lean`: SCC と現在の状態に基づく完了条件の検証
 - `TaskManager/DB.lean`: CSV 保存・読み込み、実行器、状態更新
 - `TaskManager/Csv.lean`: CSV の解析と出力
 - `TaskManager/Config.lean`, `Cli.lean`: 設定と再利用できる CLI
