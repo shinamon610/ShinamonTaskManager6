@@ -22,6 +22,31 @@ private def component (graph : Graph Tag) (id : NodeId) : Std.HashSet NodeId :=
   graph.nodes.foldl (fun ids node =>
     if forward.contains node.id && backward.contains node.id then ids.insert node.id else ids) {}
 
+/-- 更新前の到達範囲と末端 SCC を確定してから、その全ノードへ共通の依存先を追加する。 -/
+def addPrerequisite (graph : Graph Tag) (root target : NodeId) : Except String (Graph Tag) := do
+  unless graph.nodes.any (·.id == root) && graph.nodes.any (·.id == target) do
+    throw s!"Invalid prerequisite: {root} -> {target}"
+  let scope := reachable graph root
+  let mut checked : Std.HashSet NodeId := {}
+  let mut terminals : Std.HashSet NodeId := {}
+  for node in graph.nodes do
+    if scope.contains node.id && !checked.contains node.id then
+      let members := component graph node.id
+      let isTerminal := !graph.edges.any (fun edge =>
+        members.contains edge.source && !members.contains edge.target)
+      for member in graph.nodes do
+        if members.contains member.id then
+          checked := checked.insert member.id
+          if isTerminal then
+            terminals := terminals.insert member.id
+  let mut edges := graph.edges
+  for node in graph.nodes do
+    if terminals.contains node.id then
+      let edge : Edge := { source := node.id, target }
+      unless edges.contains edge do
+        edges := edges.push edge
+  return { graph with edges }
+
 /-- 指定された未完了タスクの完了条件を検証する。完了済みタスクの再完了は許可する。 -/
 def checkDoneable (graph : Graph Tag) (id : NodeId) : Except String Unit := do
   let some node := graph.nodes.find? (·.id == id)

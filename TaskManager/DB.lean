@@ -192,6 +192,10 @@ private def interpret [ToJson Tag] (program : TaskProg Tag α) : StateT (Executi
       throw <| IO.userError s!"Invalid edge: {source} -> {target}"
     modify fun s => { s with graph := { graph with edges := graph.edges.push { source, target } } }
     interpret next
+  | .addPrerequisite root target next =>
+    let graph ← IO.ofExcept ((← get).graph.addPrerequisite root target)
+    modify fun s => { s with graph }
+    interpret next
 
 /--
 CSV を読み込み、定義をメモリ上で実行し、成功した場合のみ到達集合を保存する。
