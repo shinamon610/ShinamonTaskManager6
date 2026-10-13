@@ -219,13 +219,6 @@ def setTaskStatus [ToJson Tag] (path : System.FilePath)
     match s.graph.checkDoneable id with
     | .ok () => pure ()
     | .error message => throw <| IO.userError message
-  else
-    for edge in s.graph.edges do
-      if edge.source == id then
-        let some dependency := s.graph.nodes.find? (·.id == edge.target)
-          | throw <| IO.userError s!"Missing dependency: {edge.target}"
-        unless dependency.state.status == .Done do
-          throw <| IO.userError s!"Task {id} requires completed dependency {dependency.id} ({dependency.task.name})"
   let state ← if status == .Done then completed oldState result else pure { oldState with status }
   save path (← withState s.records id state)
 
